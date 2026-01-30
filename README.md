@@ -30,7 +30,7 @@
 
 1. 克隆或下载项目：
 ```bash
-git clone https://github.com/yourusername/KB-Folder-Manager.git
+git clone https://github.com/buptanswer/KB-Folder-Manager.git
 cd KB-Folder-Manager
 ```
 
@@ -170,7 +170,7 @@ MIT License - 详见 [LICENSE](./LICENSE) 文件
 
 ## 作者
 
-Created by [Your Name]
+Created by buptanswer
 
 ## 更新日志
 
@@ -191,4 +191,4 @@ Created by [Your Name]
 
 ---
 
-**最后更新：** 2026年1月
+**最后更新：** 2026年1月30日
