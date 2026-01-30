@@ -1,8 +1,8 @@
 # KB Folder Manager
 
-一个为个人知识库整理和管理而设计的 Windows/Python 工具，提供文件夹分割、合并、校验和索引功能。
+一个为个人知识库整理和管理而设计的 Windows/Python 工具，提供文件夹分割、合并、校验和索引功能。**v3.0 新增精美的图形用户界面（GUI）！**
 
-[用户手册完整版](#文档) | [项目需求与设计](./KB-Folder-Manager项目文档/KB%20Folder%20Manager%20项目需求与设计文档%20(v2.8).md)
+📖 **文档导航**: [用户指南](./docs/user-guide.md) | [开发者指南](./docs/developer-guide.md) | [发布说明](./docs/release-notes/v3.0.md) | [更新日志](./CHANGELOG.md)
 
 ## 功能特性
 
@@ -39,7 +39,58 @@ cd KB-Folder-Manager
 pip install -r requirements.txt
 ```
 
-### 基本用法
+**注意**：项目使用相对导入，所有命令需要在项目根目录下运行。如果需要从其他目录调用，可以：
+
+**方法 1**：将项目目录添加到 PYTHONPATH
+```powershell
+# Windows PowerShell
+$env:PYTHONPATH = "C:\path\to\KB-Folder-Manager"
+python -m kb_folder_manager.gui
+
+# 或在当前会话临时设置
+$env:PYTHONPATH = "$PWD"
+python -m kb_folder_manager.gui
+```
+
+```bash
+# Linux/Mac
+export PYTHONPATH=/path/to/KB-Folder-Manager
+python -m kb_folder_manager.gui
+```
+
+**方法 2**（推荐）：在项目根目录直接运行
+```powershell
+cd KB-Folder-Manager
+python kb_folder_manager_gui.py
+```
+
+### 使用方式
+
+#### 🎨 GUI 图形界面（推荐新手使用）
+
+启动图形界面：
+```powershell
+python kb_folder_manager_gui.py
+```
+
+GUI 提供：
+- 直观的可视化操作界面
+- 实时进度显示和日志输出
+- 友好的错误提示
+- 无需记忆命令参数
+
+**快速测试 GUI**：
+```powershell
+# 创建测试数据并按照屏幕提示操作
+python tests\create_test_data_for_gui.py
+python kb_folder_manager_gui.py
+```
+
+详细使用说明请参考：[用户指南 - GUI 使用章节](./docs/user-guide.md#gui-使用)
+
+#### ⌨️ 命令行界面（适合自动化）
+
+命令行适合脚本自动化和批量处理。
 
 #### 拆分（Split）
 将知识库拆分为文档和资源：
@@ -126,39 +177,35 @@ KB-Folder-Manager/
 
 ## 文档
 
-- [用户手册](./用户手册.md) - 详细的功能说明和使用指南
+### 主要文档
+- **[用户指南](./docs/user-guide.md)** - 完整的用户使用手册（含安装、配置、GUI、CLI）
+- **[开发者指南](./docs/developer-guide.md)** - 开发文档（含架构、测试、贡献指南）
+- **[发布说明 v3.0](./docs/release-notes/v3.0.md)** - v3.0 版本更新详情
+- **[更新日志](./CHANGELOG.md)** - 完整的版本更新记录
+
+### 历史文档
 - [项目设计文档](./KB-Folder-Manager项目文档/KB%20Folder%20Manager%20项目需求与设计文档%20(v2.8).md) - 完整的技术设计和需求分析
-- 更多历史文档见 [KB-Folder-Manager项目文档/](./KB-Folder-Manager项目文档/)
+- [KB-Folder-Manager项目文档/](./KB-Folder-Manager项目文档/) - 历史版本文档
 
 ## 常见问题
 
-### Q: 如何处理大量文件？
-A: 可以分批处理，或使用 `--force` 参数在输出目录非空的情况下继续执行。
+详细问题解答请参考 [用户指南 - 常见问题章节](./docs/user-guide.md#常见问题)。
 
-### Q: 占位符的作用是什么？
-A: 占位符（空文件夹）用来标记原始位置，避免合并时出现问题。保留占位符可以完整还原目录结构。
-
-### Q: 如何验证操作的正确性？
-A: 每个操作都会生成索引文件（`.kb_index.json`），包含哈希值，可用于验证文件完整性。
-
-### Q: 可以使用其他操作系统吗？
-A: 当前主要针对 Windows 优化。Linux/Mac 用户可以尝试，但某些功能（如 7-Zip）可能需要调整。
+**快速答案**：
+- **如何处理大量文件？** - 可以分批处理，或使用 `--force` 参数
+- **占位符的作用？** - 标记原始位置，避免合并时出现问题
+- **如何验证正确性？** - 查看生成的 `.kb_index.json` 索引文件
+- **其他操作系统？** - 主要针对 Windows，Linux/Mac 可尝试但需调整
 
 ## 开发
 
 ### 运行测试
 ```bash
-python -m pytest tests/
+python -m unittest discover tests
 ```
 
-### 代码结构说明
-
-- **cli.py** - 命令行参数解析和主流程控制
-- **operations.py** - Split、Merge、Validate 的核心算法实现
-- **indexer.py** - 文件索引生成和校验
-- **validator.py** - 文件夹结构合规性检查
-- **config.py** - YAML 配置加载和管理
-- **utils.py** - 通用工具函数（路径处理、日志等）
+### 更多开发信息
+详见 [开发者指南](./docs/developer-guide.md)
 
 ## 许可证
 
@@ -173,6 +220,16 @@ MIT License - 详见 [LICENSE](./LICENSE) 文件
 Created by buptanswer
 
 ## 更新日志
+
+### v3.0 (2026-01-30)
+- 🎉 **新增图形用户界面 (GUI)**
+  - 基于 ttkbootstrap 的现代化界面设计
+  - 支持所有核心功能：Split、Merge、Validate、Index
+  - 实时进度条和日志输出
+  - 友好的文件/文件夹浏览器
+  - 配置管理界面
+- 完整的 GUI 测试套件
+- 新增 GUI 使用指南文档
 
 ### v2.8
 - 完善索引生成功能
@@ -191,4 +248,4 @@ Created by buptanswer
 
 ---
 
-**最后更新：** 2026年1月30日
+**最后更新：** 2026年1月30日 | **版本：** v3.0

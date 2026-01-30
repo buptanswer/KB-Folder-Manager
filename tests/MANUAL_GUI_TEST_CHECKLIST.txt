@@ -1,0 +1,123 @@
+"""
+Manual GUI Test Checklist
+========================
+
+This script provides a checklist for manually testing the GUI.
+Run: python kb_folder_manager_gui.py
+
+Then follow this checklist:
+
+## Pre-Launch Check
+[ ] All dependencies installed (pip install -r requirements.txt)
+[ ] config.yaml exists in project root
+
+## GUI Launch Test
+[ ] GUI window opens without errors
+[ ] Window title shows "KB Folder Manager v3.0"
+[ ] All 5 tabs are visible: Split, Merge, Validate, Index, Settings
+
+## Split Tab Test
+[ ] "Source (Complete Folder)" field and Browse button visible
+[ ] "Output Root" field and Browse button visible
+[ ] "Force" checkbox works
+[ ] "Auto-confirm" checkbox works
+[ ] "Execute Split Operation" button is clickable
+[ ] Browse dialogs open correctly
+
+## Merge Tab Test
+[ ] "Doc Folder" field and Browse button visible
+[ ] "Res Folder" field and Browse button visible
+[ ] "Output Root" field and Browse button visible
+[ ] "Force" checkbox works
+[ ] "Auto-confirm" checkbox works
+[ ] "Execute Merge Operation" button is clickable
+[ ] Browse dialogs open correctly
+
+## Validate Tab Test
+[ ] 4 radio buttons visible: Class1, Class2, Mutual, Compare
+[ ] Input fields change based on selected mode
+[ ] "Log Directory" field and Browse button visible
+[ ] "Execute Validation" button is clickable
+[ ] Mode selection updates input fields dynamically
+
+## Index Tab Test
+[ ] "Target Folder" field and Browse button visible
+[ ] "Output Index File" field and Browse button visible
+[ ] "Log Directory" field and Browse button visible
+[ ] "Generate Index" button is clickable
+[ ] Browse dialogs work for files and folders
+
+## Settings Tab Test
+[ ] Configuration information displayed
+[ ] File types list shown
+[ ] Placeholder suffix shown
+[ ] Hash algorithm shown
+[ ] "Reload Configuration" button works
+[ ] "Open Config File" button works
+
+## Progress and Logging Test
+[ ] Progress bar visible at bottom
+[ ] Status label shows "Ready" initially
+[ ] Log output area is scrollable
+[ ] Log output area has proper size
+
+## Functional Test (Optional - requires test data)
+### Split Operation
+[ ] Select a test folder with mixed file types
+[ ] Execute split operation
+[ ] Progress bar updates during operation
+[ ] Log output shows operation details
+[ ] Success message appears when complete
+[ ] Output folders created correctly
+
+### Merge Operation
+[ ] Select doc and res folders from previous split
+[ ] Execute merge operation
+[ ] Progress updates shown
+[ ] Success message appears
+[ ] Merged folder created correctly
+
+### Validate Operation
+[ ] Select a folder to validate
+[ ] Choose Class1 mode
+[ ] Execute validation
+[ ] Log shows validation results
+[ ] No errors if folder is valid
+
+### Index Operation
+[ ] Select a folder to index
+[ ] Specify output file path
+[ ] Execute index generation
+[ ] Index file created successfully
+[ ] JSON file is valid
+
+## Error Handling Test
+[ ] Empty path fields show error message
+[ ] Invalid paths show error message
+[ ] Operation errors display in messagebox
+[ ] Error messages are clear and actionable
+
+## UI Responsiveness Test
+[ ] GUI doesn't freeze during operations
+[ ] Can view logs in real-time
+[ ] Progress bar animates smoothly
+[ ] Window can be moved/resized
+
+## Cleanup Test
+[ ] Close button works
+[ ] No error when closing during operation (if applicable)
+[ ] No zombie processes left after close
+
+========================
+Result: [ ] PASS  [ ] FAIL
+
+If FAIL, note issues:
+_____________________________________
+_____________________________________
+_____________________________________
+
+Tester: ______________  Date: __________
+"""
+
+if __name__ == '__main__':
+    print(__doc__)

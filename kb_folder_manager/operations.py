@@ -96,8 +96,9 @@ def split_operation(source: Path, output_root: Path, config: Config, force: bool
                 placeholder_name = name + config.placeholder_suffix
                 placeholder_path = (doc_root / Path(rel_path).parent / placeholder_name)
                 ensure_dir(placeholder_path)
-            if idx % 200 == 0 or idx == total_files:
-                exec_log.info(f'split copy progress: {idx}/{total_files}')
+            # Report progress more frequently (every 10 files instead of 200) and always on last file
+            if idx % 10 == 0 or idx == total_files:
+                exec_log.info(f'split copy progress: {idx}/{total_files} | current: {rel_path}')
 
         exec_log.info('writing doc/res indexes')
         doc_index = build_index(doc_root, config.placeholder_suffix, config.hash_algorithm, exec_log)
@@ -174,8 +175,9 @@ def merge_operation(doc_path: Path, res_path: Path, output_root: Path, config: C
                 exec_log.fatal(f'conflict during merge: {rel_path} already exists')
                 abort_if_blockers(exec_log, 'merge execution')
             copy_file(doc_path / rel_path, dest)
-            if idx % 200 == 0 or idx == total_doc:
-                exec_log.info(f'merge copy progress (doc): {idx}/{total_doc}')
+            # Report progress more frequently (every 10 files) and show current file
+            if idx % 10 == 0 or idx == total_doc:
+                exec_log.info(f'merge copy progress (doc): {idx}/{total_doc} | current: {rel_path}')
 
         # Copy files from res
         for idx, rel_path in enumerate(res_files, start=1):
@@ -184,8 +186,9 @@ def merge_operation(doc_path: Path, res_path: Path, output_root: Path, config: C
                 exec_log.fatal(f'conflict during merge: {rel_path} already exists')
                 abort_if_blockers(exec_log, 'merge execution')
             copy_file(res_path / rel_path, dest)
-            if idx % 200 == 0 or idx == total_res:
-                exec_log.info(f'merge copy progress (res): {idx}/{total_res}')
+            # Report progress more frequently (every 10 files) and show current file
+            if idx % 10 == 0 or idx == total_res:
+                exec_log.info(f'merge copy progress (res): {idx}/{total_res} | current: {rel_path}')
 
         merged_index = build_index(complete_root, config.placeholder_suffix, config.hash_algorithm, exec_log)
         write_index(output_root / 'index' / 'complete' / '.kb_index.json', merged_index)

@@ -19,7 +19,7 @@ def build_index(root: Path, placeholder_suffix: str, hash_algorithm: str, logger
     files: dict[str, dict] = {}
     dirs: dict[str, dict] = {}
     placeholders: dict[str, dict] = {}
-    progress_every = 200
+    progress_every = 10  # Reduced from 200 to 10 for more frequent GUI updates
     file_count = 0
     dir_count = 0
     placeholder_count = 0
