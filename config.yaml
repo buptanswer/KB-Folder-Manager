@@ -1,0 +1,15 @@
+specified_types: [
+  '.pdf', '.doc', '.docx', '.xlsx', '.xls', '.ppt', '.pptx',
+  '.txt', '.xmind', '.asset',
+  '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.tif', '.svg',
+  '.md', '.markdown',
+  '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.rmvb', '.srt',
+  '.mp3', '.wav', '.flac', '.aac', '.ogg',
+  '.py', '.java', '.c', '.cpp', '.js', '.html', '.css', '.json', '.xml', '.yaml', '.sh', '.ino',
+  '.drawio', '.csv'
+]
+
+placeholder_suffix: "(在百度网盘)"
+
+hash_algorithm: "sha256"
+use_7zip: true
