@@ -72,6 +72,26 @@ def hash_file(path: Path, algorithm: str) -> str:
     return h.hexdigest()
 
 
+def resolve_worker_count(override: Optional[int] = None) -> int:
+    if override is not None:
+        if override < 1:
+            raise ValueError(f'worker count must be >= 1, got: {override}')
+        return int(override)
+
+    env_value = os.environ.get('KBFM_MAX_WORKERS')
+    if env_value:
+        try:
+            env_workers = int(env_value)
+        except ValueError as exc:
+            raise ValueError(f'invalid KBFM_MAX_WORKERS value: {env_value}') from exc
+        if env_workers < 1:
+            raise ValueError(f'KBFM_MAX_WORKERS must be >= 1, got: {env_workers}')
+        return env_workers
+
+    cpu_count = os.cpu_count() or 1
+    return max(2, cpu_count)
+
+
 def copy_file(src: Path, dst: Path) -> None:
     import shutil
     ensure_dir(dst.parent)

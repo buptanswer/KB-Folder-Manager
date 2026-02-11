@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import queue
+import re
 import threading
+import time
 from pathlib import Path
 from tkinter import filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
@@ -11,6 +13,7 @@ from typing import Any, Callable
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 
+from . import __version__
 from .config import Config, load_config, DEFAULT_CONFIG_NAME
 from .operations import (
     compare_operation,
@@ -25,53 +28,358 @@ from .utils import FatalError, now_timestamp
 
 class LogCapture:
     """Captures log output for display in GUI."""
-    
-    def __init__(self, text_widget: ScrolledText, 
-                 progress_callback: Callable[[int, int], None] | None = None,
-                 status_callback: Callable[[str], None] | None = None):
+
+    _PROGRESS_RE = re.compile(
+        r'progress(?:\s*\([^)]+\))?:\s*(?:files=)?(\d+)\s*/\s*(\d+)',
+        re.IGNORECASE,
+    )
+    _COMPARE_PATH_PATTERNS = (
+        'compare: missing file in new: ',
+        'compare: extra file in new: ',
+        'compare: size mismatch: ',
+        'compare: hash mismatch: ',
+        'compare: mtime differs but hash same: ',
+    )
+    _PATH_HINT_RE = re.compile(r'\.[A-Za-z0-9]{1,10}$')
+    _ISSUE_LEVELS = ('FATAL', 'ERROR', 'WARNING')
+    _KEY_INFO_HINTS = (
+        'started',
+        'complete',
+        'completed',
+        'pre-check',
+        'post-check',
+        'building',
+        'writing',
+        'running',
+        'queue prepared',
+        'output root ready',
+        'summary:',
+    )
+
+    def __init__(
+        self,
+        text_widget: ScrolledText,
+        progress_callback: Callable[[int, int], None] | None = None,
+        status_callback: Callable[[str], None] | None = None,
+    ):
         self.text_widget = text_widget
         self.progress_callback = progress_callback
         self.status_callback = status_callback
-        
+        self._buffer = ''
+        self._last_progress_log_ts = 0.0
+        self._last_progress_logged_current = 0
+        self._last_progress_logged_percent = -1
+        self._suppressed_info_lines = 0
+        self._max_visible_lines = 800
+        self._seen_issue_categories: set[tuple[str, str]] = set()
+        self._pending_issue_groups: dict[str, dict[str, dict[str, int]]] = {
+            level: {} for level in self._ISSUE_LEVELS
+        }
+        self._pending_issue_totals: dict[str, int] = {
+            level: 0 for level in self._ISSUE_LEVELS
+        }
+        self._pending_path_issue_categories: dict[str, set[str]] = {}
+        self._pending_issues_since_breakdown = 0
+        self._pending_issues_since_snapshot = 0
+        self._last_issue_snapshot_ts = time.monotonic()
+
     def write(self, message: str) -> None:
-        """Write message to text widget."""
-        self.text_widget.insert(END, message)
+        """Filter and route log lines for GUI display."""
+        if not message:
+            return
+
+        self._buffer += message
+        while '\n' in self._buffer:
+            line, self._buffer = self._buffer.split('\n', 1)
+            self._process_line(line.rstrip('\r'))
+
+    def flush(self) -> None:
+        """File-like flush for stdout/stderr compatibility."""
+        if self._buffer:
+            self._process_line(self._buffer.rstrip('\r'))
+            self._buffer = ''
+        self._emit_issue_breakdown(force=True)
+        self._emit_suppressed_hint_if_needed(force=True)
+
+    def _process_line(self, line: str) -> None:
+        if not line:
+            return
+
+        lower = line.lower()
+        level = self._extract_level(line)
+        progress = self._parse_progress(line)
+        if level in self._ISSUE_LEVELS:
+            issue_content = self._strip_level_prefix(line, level)
+            self._record_issue(level, issue_content)
+            self._maybe_emit_issue_snapshot()
+            return
+
+        show_line = False
+        if progress is not None:
+            current, total = progress
+            show_line = self._should_show_progress_line(current, total)
+        elif 'summary:' in lower:
+            self._emit_issue_breakdown(force=False)
+            show_line = True
+        elif level == 'INFO':
+            show_line = self._is_key_info(lower)
+        else:
+            show_line = True
+
+        if show_line:
+            self._emit_suppressed_hint_if_needed(force=(progress is None))
+            self._append_line(line)
+        else:
+            self._suppressed_info_lines += 1
+
+        if progress is not None:
+            self._handle_progress_callbacks(line, progress)
+        else:
+            self._update_stage_status(lower)
+
+    def _extract_level(self, line: str) -> str | None:
+        if line.startswith('['):
+            right = line.find(']')
+            if right > 1:
+                return line[1:right].strip().upper()
+        return None
+
+    def _strip_level_prefix(self, line: str, level: str | None) -> str:
+        if not level:
+            return line.strip()
+        prefix = f'[{level}]'
+        if line.startswith(prefix):
+            return line[len(prefix):].strip()
+        return line.strip()
+
+    def _parse_progress(self, line: str) -> tuple[int, int] | None:
+        m = self._PROGRESS_RE.search(line)
+        if not m:
+            return None
+        try:
+            current = int(m.group(1))
+            total = int(m.group(2))
+        except ValueError:
+            return None
+        if total <= 0:
+            return None
+        return current, total
+
+    def _should_show_progress_line(self, current: int, total: int) -> bool:
+        now = time.monotonic()
+        percent = int((current / total) * 100)
+        # Keep GUI progress lines concise: show roughly every 5% (or every 3s), plus first/last.
+        should_show = (
+            current >= total
+            or self._last_progress_logged_current == 0
+            or (percent - self._last_progress_logged_percent) >= 5
+            or (now - self._last_progress_log_ts) >= 3.0
+        )
+        if should_show:
+            self._last_progress_logged_current = current
+            self._last_progress_logged_percent = percent
+            self._last_progress_log_ts = now
+        return should_show
+
+    def _is_key_info(self, lower: str) -> bool:
+        return any(hint in lower for hint in self._KEY_INFO_HINTS)
+
+    def _emit_suppressed_hint_if_needed(self, force: bool = False) -> None:
+        if self._suppressed_info_lines <= 0:
+            return
+        if not force and self._suppressed_info_lines < 50:
+            return
+        hint = (
+            f'[INFO] (GUI 已省略 {self._suppressed_info_lines} 条详细日志；'
+            '完整内容请查看输出目录日志文件)'
+        )
+        self._append_line(hint)
+        self._suppressed_info_lines = 0
+
+    def _record_issue(self, level: str, issue_content: str) -> None:
+        category, item, has_path = self._extract_issue_category_and_item(issue_content)
+        level_groups = self._pending_issue_groups[level]
+        item_counts = level_groups.setdefault(category, {})
+        item_counts[item] = item_counts.get(item, 0) + 1
+        self._pending_issue_totals[level] += 1
+        self._pending_issues_since_breakdown += 1
+        self._pending_issues_since_snapshot += 1
+
+        if has_path:
+            cats = self._pending_path_issue_categories.setdefault(item, set())
+            cats.add(f'{level}:{category}')
+
+        issue_key = (level, category)
+        if issue_key not in self._seen_issue_categories:
+            self._seen_issue_categories.add(issue_key)
+            preview = self._shorten_text(item, 90) if has_path else self._shorten_text(issue_content, 90)
+            self._append_line(f'[{level}] 问题类别: {category} | 示例: {preview}')
+
+    def _extract_issue_category_and_item(self, issue_content: str) -> tuple[str, str, bool]:
+        text = issue_content.strip()
+        if not text:
+            return 'unknown issue', 'unknown issue', False
+
+        extracted = self._extract_issue_by_known_patterns(text)
+        if extracted is not None:
+            return extracted
+
+        for token in (' for ', ': '):
+            if token not in text:
+                continue
+            head, tail = text.rsplit(token, 1)
+            candidate = tail.strip()
+            if self._looks_like_path(candidate):
+                category = head.strip()
+                if not category:
+                    category = text
+                return category, candidate, True
+
+        return text, text, False
+
+    def _extract_issue_by_known_patterns(self, text: str) -> tuple[str, str, bool] | None:
+        lower = text.lower()
+        for prefix in self._COMPARE_PATH_PATTERNS:
+            if lower.startswith(prefix):
+                return prefix[:-2], text[len(prefix):].strip(), True
+        return None
+
+    def _looks_like_path(self, value: str) -> bool:
+        s = value.strip()
+        if not s:
+            return False
+        lower = s.lower()
+        if ' old=' in lower or ' new=' in lower or ' vs ' in lower:
+            return False
+        if '/' in s or '\\' in s:
+            return True
+        if self._PATH_HINT_RE.search(s):
+            return True
+        return False
+
+    def _maybe_emit_issue_snapshot(self) -> None:
+        if self._pending_issues_since_snapshot <= 0:
+            return
+        now = time.monotonic()
+        total = sum(self._pending_issue_totals.values())
+        if total < 200:
+            return
+        if self._pending_issues_since_snapshot < 300 and (now - self._last_issue_snapshot_ts) < 12.0:
+            return
+        f = self._pending_issue_totals['FATAL']
+        e = self._pending_issue_totals['ERROR']
+        w = self._pending_issue_totals['WARNING']
+        self._append_line(f'[DIAG] 问题累计: FATAL={f}, ERROR={e}, WARNING={w}（阶段汇总将按类别展示）')
+        self._pending_issues_since_snapshot = 0
+        self._last_issue_snapshot_ts = now
+
+    def _emit_issue_breakdown(self, force: bool = False) -> None:
+        if self._pending_issues_since_breakdown <= 0 and not force:
+            return
+        total_pending = sum(self._pending_issue_totals.values())
+        if total_pending <= 0:
+            return
+
+        f = self._pending_issue_totals['FATAL']
+        e = self._pending_issue_totals['ERROR']
+        w = self._pending_issue_totals['WARNING']
+        self._append_line(f'[DIAG] 问题分类汇总: FATAL={f}, ERROR={e}, WARNING={w}')
+
+        for level in self._ISSUE_LEVELS:
+            groups = self._pending_issue_groups[level]
+            if not groups:
+                continue
+            sorted_categories = sorted(groups.keys())
+            for category in sorted_categories:
+                item_counts = groups[category]
+                sorted_items = sorted(item_counts.keys())
+                unique_count = len(sorted_items)
+                hit_count = sum(item_counts.values())
+                self._append_line(f'[DIAG][{level}] {category} | paths={unique_count}, hits={hit_count}')
+                show_n = min(5, unique_count)
+                for item in sorted_items[:show_n]:
+                    self._append_line(f'  - {self._shorten_text(item, 110)}')
+                if unique_count > show_n:
+                    self._append_line(f'  - ... +{unique_count - show_n} more')
+
+        multi_issue_paths = [
+            (path, cats)
+            for path, cats in self._pending_path_issue_categories.items()
+            if len(cats) > 1
+        ]
+        if multi_issue_paths:
+            self._append_line(f'[DIAG] 同一路径存在多类问题: {len(multi_issue_paths)} 个')
+            for path, cats in sorted(multi_issue_paths, key=lambda x: x[0])[:5]:
+                cat_text = ' | '.join(sorted(cats))
+                self._append_line(f'  - {self._shorten_text(path, 100)} => {self._shorten_text(cat_text, 120)}')
+            if len(multi_issue_paths) > 5:
+                self._append_line(f'  - ... +{len(multi_issue_paths) - 5} more')
+
+        self._pending_issue_groups = {level: {} for level in self._ISSUE_LEVELS}
+        self._pending_issue_totals = {level: 0 for level in self._ISSUE_LEVELS}
+        self._pending_path_issue_categories = {}
+        self._pending_issues_since_breakdown = 0
+        self._pending_issues_since_snapshot = 0
+
+    def _shorten_text(self, text: str, max_len: int) -> str:
+        if len(text) <= max_len:
+            return text
+        return '...' + text[-(max_len - 3):]
+
+    def _append_line(self, line: str) -> None:
+        gui_line = self._simplify_line_for_gui(line)
+        self.text_widget.insert(END, gui_line + '\n')
         self.text_widget.see(END)
+        try:
+            total_lines = int(self.text_widget.index('end-1c').split('.')[0])
+            if total_lines > self._max_visible_lines:
+                delete_upto = total_lines - self._max_visible_lines
+                self.text_widget.delete('1.0', f'{delete_upto + 1}.0')
+        except Exception:
+            # Never fail operation due to UI log trimming issues.
+            pass
         self.text_widget.update_idletasks()
-        
-        # Parse progress from log messages like "progress: 100/500"
-        if 'progress:' in message.lower():
-            try:
-                # Extract progress numbers
-                parts = message.split('progress:')[1].split('/')
-                if len(parts) >= 2:
-                    current_str = parts[0].strip().split()[-1]
-                    total_str = parts[1].strip().split()[0].split('|')[0].strip()
-                    current = int(current_str)
-                    total = int(total_str)
-                    if self.progress_callback:
-                        self.progress_callback(current, total)
-                    
-                    # Extract current file if present
-                    if '| current:' in message and self.status_callback:
-                        current_file = message.split('| current:')[1].strip()
-                        # Truncate long paths
-                        if len(current_file) > 60:
-                            current_file = '...' + current_file[-57:]
-                        self.status_callback(f"Processing [{current}/{total}]: {current_file}")
-            except (ValueError, IndexError):
-                pass
-        
-        # Show status for key operations
-        elif self.status_callback:
-            if 'started' in message.lower():
-                self.status_callback("Operation started...")
-            elif 'building' in message.lower() and 'index' in message.lower():
-                self.status_callback("Building index...")
-            elif 'validation' in message.lower() or 'validating' in message.lower():
-                self.status_callback("Validating...")
-            elif 'writing' in message.lower() and 'index' in message.lower():
-                self.status_callback("Writing indexes...")
+
+    def _simplify_line_for_gui(self, line: str) -> str:
+        lower = line.lower()
+        marker = '| current:'
+        if 'progress' in lower and marker in lower:
+            idx = lower.find(marker)
+            if idx > 0:
+                return line[:idx].rstrip()
+        return line
+
+    def _handle_progress_callbacks(self, line: str, progress: tuple[int, int]) -> None:
+        current, total = progress
+        if self.progress_callback:
+            self.progress_callback(current, total)
+
+        if not self.status_callback:
+            return
+
+        lower = line.lower()
+        marker = '| current:'
+        if marker in lower:
+            idx = lower.find(marker)
+            current_file = line[idx + len(marker):].strip()
+            if len(current_file) > 60:
+                current_file = '...' + current_file[-57:]
+            self.status_callback(f"Processing [{current}/{total}]: {current_file}")
+        else:
+            percent = int((current / total) * 100)
+            self.status_callback(f"Processing [{current}/{total}] ({percent}%)")
+
+    def _update_stage_status(self, lower: str) -> None:
+        if not self.status_callback:
+            return
+        if 'started' in lower:
+            self.status_callback("Operation started...")
+        elif 'building' in lower and 'index' in lower:
+            self.status_callback("Building index...")
+        elif 'validation' in lower or 'validating' in lower:
+            self.status_callback("Validating...")
+        elif 'writing' in lower and 'index' in lower:
+            self.status_callback("Writing indexes...")
 
 
 
@@ -106,6 +414,11 @@ class OperationThread(threading.Thread):
         except Exception as e:
             self.result_queue.put(('error', str(e)))
         finally:
+            if self.log_capture:
+                try:
+                    self.log_capture.flush()
+                except Exception:
+                    pass
             # Restore stdout/stderr
             sys.stdout = old_stdout
             sys.stderr = old_stderr
@@ -114,7 +427,7 @@ class OperationThread(threading.Thread):
 class KBFolderManagerGUI:
     """Main GUI application for KB Folder Manager."""
     
-    VERSION = "3.0"
+    VERSION = __version__
     
     def __init__(self, root: ttk.Window):
         self.root = root
@@ -129,6 +442,10 @@ class KBFolderManagerGUI:
         # Operation state
         self.operation_running = False
         self.result_queue: queue.Queue = queue.Queue()
+        self._status_base_text = 'Ready'
+        self._spinner_frames = ('|', '/', '-', '\\')
+        self._spinner_index = 0
+        self._spinner_after_id: str | None = None
         
         # Setup UI
         self.setup_ui()
@@ -662,11 +979,41 @@ class KBFolderManagerGUI:
         if total > 0:
             percentage = int((current / total) * 100)
             self.progress_var.set(percentage)
-            self.status_label.config(text=f"{current}/{total} ({percentage}%)")
+            self.set_status(f"{current}/{total} ({percentage}%)")
             
     def set_status(self, message: str) -> None:
         """Set status label text."""
-        self.status_label.config(text=message)
+        self._status_base_text = message
+        self._render_status()
+
+    def _render_status(self) -> None:
+        if self.operation_running:
+            frame = self._spinner_frames[self._spinner_index % len(self._spinner_frames)]
+            self.status_label.config(text=f"{self._status_base_text} {frame}")
+        else:
+            self.status_label.config(text=self._status_base_text)
+
+    def _start_status_spinner(self) -> None:
+        self._stop_status_spinner()
+        self._spinner_index = 0
+        self._tick_status_spinner()
+
+    def _tick_status_spinner(self) -> None:
+        if not self.operation_running:
+            self._spinner_after_id = None
+            return
+        self._spinner_index = (self._spinner_index + 1) % len(self._spinner_frames)
+        self._render_status()
+        self._spinner_after_id = self.root.after(250, self._tick_status_spinner)
+
+    def _stop_status_spinner(self) -> None:
+        if self._spinner_after_id is not None:
+            try:
+                self.root.after_cancel(self._spinner_after_id)
+            except Exception:
+                pass
+            self._spinner_after_id = None
+        self._render_status()
         
     def execute_split(self) -> None:
         """Execute split operation."""
@@ -689,6 +1036,7 @@ class KBFolderManagerGUI:
         self.progress_var.set(0)
         self.set_status("Running split operation...")
         self.operation_running = True
+        self._start_status_spinner()
         
         # Create log capture with progress and status callbacks
         log_capture = LogCapture(
@@ -734,6 +1082,7 @@ class KBFolderManagerGUI:
         self.progress_var.set(0)
         self.set_status("Running merge operation...")
         self.operation_running = True
+        self._start_status_spinner()
         
         # Create log capture with progress and status callbacks
         log_capture = LogCapture(
@@ -781,6 +1130,7 @@ class KBFolderManagerGUI:
         self.progress_var.set(0)
         self.set_status(f"Running {mode} validation...")
         self.operation_running = True
+        self._start_status_spinner()
         
         # Create log capture with progress and status callbacks
         log_capture = LogCapture(
@@ -796,6 +1146,7 @@ class KBFolderManagerGUI:
             if not target or not target.get():
                 messagebox.showerror("Input Error", "Please specify target folder!")
                 self.operation_running = False
+                self._stop_status_spinner()
                 return
             thread = OperationThread(
                 validate_operation,
@@ -813,6 +1164,7 @@ class KBFolderManagerGUI:
             if not doc or not doc.get() or not res or not res.get():
                 messagebox.showerror("Input Error", "Please specify doc and res folders!")
                 self.operation_running = False
+                self._stop_status_spinner()
                 return
             thread = OperationThread(
                 validate_mutual_operation,
@@ -829,6 +1181,7 @@ class KBFolderManagerGUI:
             if not old or not old.get() or not new or not new.get():
                 messagebox.showerror("Input Error", "Please specify old and new folders!")
                 self.operation_running = False
+                self._stop_status_spinner()
                 return
             thread = OperationThread(
                 compare_operation,
@@ -842,6 +1195,7 @@ class KBFolderManagerGUI:
         else:
             messagebox.showerror("Error", f"Unknown validation mode: {mode}")
             self.operation_running = False
+            self._stop_status_spinner()
             return
             
         thread.start()
@@ -871,6 +1225,7 @@ class KBFolderManagerGUI:
         self.progress_var.set(0)
         self.set_status("Generating index...")
         self.operation_running = True
+        self._start_status_spinner()
         
         # Create log capture with progress and status callbacks
         log_capture = LogCapture(
@@ -898,6 +1253,7 @@ class KBFolderManagerGUI:
         try:
             result_type, message = self.result_queue.get_nowait()
             self.operation_running = False
+            self._stop_status_spinner()
             
             if result_type == 'success':
                 self.progress_var.set(100)

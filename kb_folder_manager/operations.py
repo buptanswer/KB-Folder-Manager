@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from .config import Config
@@ -13,6 +14,7 @@ from .utils import (
     is_specified_type,
     now_timestamp,
     prompt_confirm,
+    resolve_worker_count,
     safe_scandir,
     write_summary,
 )
@@ -42,6 +44,62 @@ def _make_log_dir(output_root: Path) -> Path:
     log_dir = output_root / 'logs' / now_timestamp()
     ensure_dir(log_dir)
     return log_dir
+
+
+def _parallel_copy_files(
+    copy_jobs: list[tuple[str, Path, Path]],
+    logger: Logger,
+    stage_name: str,
+    progress_every: int = 10,
+) -> None:
+    total_files = len(copy_jobs)
+    if total_files == 0:
+        logger.info(f'{stage_name} started: total_files=0')
+        return
+
+    workers = min(resolve_worker_count(), total_files)
+    logger.info(f'{stage_name} started: total_files={total_files} workers={workers}')
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_map = {
+            executor.submit(copy_file, src_file, dst_file): rel_path
+            for rel_path, src_file, dst_file in copy_jobs
+        }
+        for completed, future in enumerate(as_completed(future_map), start=1):
+            rel_path = future_map[future]
+            try:
+                future.result()
+            except Exception as exc:
+                logger.fatal(f'{stage_name} failed: {rel_path} ({exc})')
+                raise
+            if completed % progress_every == 0 or completed == total_files:
+                logger.info(f'{stage_name} progress: {completed}/{total_files} | current: {rel_path}')
+
+
+def _parallel_build_indexes(
+    left_root: Path,
+    right_root: Path,
+    config: Config,
+    logger: Logger,
+    stage_name: str,
+    left_label: str,
+    right_label: str,
+) -> tuple[dict, dict]:
+    worker_budget = resolve_worker_count()
+    per_index_workers = max(1, worker_budget // 2)
+    logger.info(
+        f'{stage_name} started: {left_label}+{right_label} with workers_per_index={per_index_workers}'
+    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        left_future = executor.submit(
+            build_index, left_root, config.placeholder_suffix, config.hash_algorithm, None, per_index_workers
+        )
+        right_future = executor.submit(
+            build_index, right_root, config.placeholder_suffix, config.hash_algorithm, None, per_index_workers
+        )
+        left_index = left_future.result()
+        right_index = right_future.result()
+    logger.info(f'{stage_name} complete: {left_label}+{right_label}')
+    return left_index, right_index
 
 
 def split_operation(source: Path, output_root: Path, config: Config, force: bool, auto_yes: bool) -> None:
@@ -80,29 +138,33 @@ def split_operation(source: Path, output_root: Path, config: Config, force: bool
             ensure_dir(res_root / rel_dir)
 
         files_list = list(complete_index.get('files', {}).keys())
-        total_files = len(files_list)
-        exec_log.info(f'split copy started: total_files={total_files}')
-        for idx, rel_path in enumerate(files_list, start=1):
+        copy_jobs: list[tuple[str, Path, Path]] = []
+        for rel_path in files_list:
             name = Path(rel_path).name
             is_spec = is_specified_type(name, config.specified_types)
             src_file = source / rel_path
             if is_spec:
-                copy_file(src_file, doc_root / rel_path)
+                copy_jobs.append((rel_path, src_file, doc_root / rel_path))
                 placeholder_name = name + config.placeholder_suffix
                 placeholder_path = (res_root / Path(rel_path).parent / placeholder_name)
                 ensure_dir(placeholder_path)
             else:
-                copy_file(src_file, res_root / rel_path)
+                copy_jobs.append((rel_path, src_file, res_root / rel_path))
                 placeholder_name = name + config.placeholder_suffix
                 placeholder_path = (doc_root / Path(rel_path).parent / placeholder_name)
                 ensure_dir(placeholder_path)
-            # Report progress more frequently (every 10 files instead of 200) and always on last file
-            if idx % 10 == 0 or idx == total_files:
-                exec_log.info(f'split copy progress: {idx}/{total_files} | current: {rel_path}')
+        _parallel_copy_files(copy_jobs, exec_log, stage_name='split copy')
 
         exec_log.info('writing doc/res indexes')
-        doc_index = build_index(doc_root, config.placeholder_suffix, config.hash_algorithm, exec_log)
-        res_index = build_index(res_root, config.placeholder_suffix, config.hash_algorithm, exec_log)
+        doc_index, res_index = _parallel_build_indexes(
+            doc_root,
+            res_root,
+            config,
+            exec_log,
+            stage_name='split indexing',
+            left_label='doc',
+            right_label='res',
+        )
         write_index(output_root / 'index' / 'doc' / '.kb_index.json', doc_index)
         write_index(output_root / 'index' / 'res' / '.kb_index.json', res_index)
 
@@ -133,8 +195,15 @@ def merge_operation(doc_path: Path, res_path: Path, output_root: Path, config: C
             abort_if_blockers(pre_log, 'merge pre-check')
 
         pre_log.info('building doc/res indexes')
-        doc_index = build_index(doc_path, config.placeholder_suffix, config.hash_algorithm, pre_log)
-        res_index = build_index(res_path, config.placeholder_suffix, config.hash_algorithm, pre_log)
+        doc_index, res_index = _parallel_build_indexes(
+            doc_path,
+            res_path,
+            config,
+            pre_log,
+            stage_name='merge pre-check indexing',
+            left_label='doc',
+            right_label='res',
+        )
         write_index(output_root / 'index' / 'merge_check_doc' / '.kb_index.json', doc_index)
         write_index(output_root / 'index' / 'merge_check_res' / '.kb_index.json', res_index)
 
@@ -166,29 +235,27 @@ def merge_operation(doc_path: Path, res_path: Path, output_root: Path, config: C
         # Copy files from doc
         doc_files = list(doc_index.get('files', {}).keys())
         res_files = list(res_index.get('files', {}).keys())
+        file_conflicts = set(doc_files) & set(res_files)
+        if file_conflicts:
+            exec_log.fatal(f'conflict during merge: {len(file_conflicts)} duplicate relative paths')
+            abort_if_blockers(exec_log, 'merge execution')
+
         total_doc = len(doc_files)
         total_res = len(res_files)
-        exec_log.info(f'merge copy started: doc_files={total_doc} res_files={total_res}')
-        for idx, rel_path in enumerate(doc_files, start=1):
-            dest = complete_root / rel_path
-            if dest.exists():
-                exec_log.fatal(f'conflict during merge: {rel_path} already exists')
-                abort_if_blockers(exec_log, 'merge execution')
-            copy_file(doc_path / rel_path, dest)
-            # Report progress more frequently (every 10 files) and show current file
-            if idx % 10 == 0 or idx == total_doc:
-                exec_log.info(f'merge copy progress (doc): {idx}/{total_doc} | current: {rel_path}')
+        existing_targets = [
+            rel_path for rel_path in (doc_files + res_files) if (complete_root / rel_path).exists()
+        ]
+        if existing_targets:
+            exec_log.fatal(
+                f'conflict during merge: {len(existing_targets)} target files already exist (e.g. {existing_targets[0]})'
+            )
+            abort_if_blockers(exec_log, 'merge execution')
 
-        # Copy files from res
-        for idx, rel_path in enumerate(res_files, start=1):
-            dest = complete_root / rel_path
-            if dest.exists():
-                exec_log.fatal(f'conflict during merge: {rel_path} already exists')
-                abort_if_blockers(exec_log, 'merge execution')
-            copy_file(res_path / rel_path, dest)
-            # Report progress more frequently (every 10 files) and show current file
-            if idx % 10 == 0 or idx == total_res:
-                exec_log.info(f'merge copy progress (res): {idx}/{total_res} | current: {rel_path}')
+        exec_log.info(f'merge copy queue prepared: doc_files={total_doc} res_files={total_res}')
+        doc_copy_jobs = [(rel_path, doc_path / rel_path, complete_root / rel_path) for rel_path in doc_files]
+        res_copy_jobs = [(rel_path, res_path / rel_path, complete_root / rel_path) for rel_path in res_files]
+        _parallel_copy_files(doc_copy_jobs, exec_log, stage_name='merge copy (doc)')
+        _parallel_copy_files(res_copy_jobs, exec_log, stage_name='merge copy (res)')
 
         merged_index = build_index(complete_root, config.placeholder_suffix, config.hash_algorithm, exec_log)
         write_index(output_root / 'index' / 'complete' / '.kb_index.json', merged_index)
@@ -270,8 +337,15 @@ def validate_operation(target: Path, mode: str, config: Config, log_dir: Path, r
 def validate_mutual_operation(doc_path: Path, res_path: Path, config: Config, log_dir: Path) -> None:
     log = Logger(log_dir / 'Validate_mutual.log')
     try:
-        doc_index = build_index(doc_path, config.placeholder_suffix, config.hash_algorithm, log)
-        res_index = build_index(res_path, config.placeholder_suffix, config.hash_algorithm, log)
+        doc_index, res_index = _parallel_build_indexes(
+            doc_path,
+            res_path,
+            config,
+            log,
+            stage_name='validate mutual indexing',
+            left_label='doc',
+            right_label='res',
+        )
         validate_mutual(doc_index, res_index, config, log)
         write_summary(log)
         abort_if_blockers(log, 'mutual validation')
@@ -282,8 +356,15 @@ def validate_mutual_operation(doc_path: Path, res_path: Path, config: Config, lo
 def compare_operation(old_path: Path, new_path: Path, config: Config, log_dir: Path) -> None:
     log = Logger(log_dir / 'Compare.log')
     try:
-        old_index = build_index(old_path, config.placeholder_suffix, config.hash_algorithm, log)
-        new_index = build_index(new_path, config.placeholder_suffix, config.hash_algorithm, log)
+        old_index, new_index = _parallel_build_indexes(
+            old_path,
+            new_path,
+            config,
+            log,
+            stage_name='compare indexing',
+            left_label='old',
+            right_label='new',
+        )
         compare_indexes(old_index, new_index, log)
         write_summary(log)
         abort_if_blockers(log, 'compare validation')

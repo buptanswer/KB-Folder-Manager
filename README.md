@@ -1,8 +1,8 @@
 # KB Folder Manager
 
-一个为个人知识库整理和管理而设计的 Windows/Python 工具，提供文件夹分割、合并、校验和索引功能。**v3.0 新增精美的图形用户界面（GUI）！**
+一个为个人知识库整理和管理而设计的 Windows/Python 工具，提供文件夹分割、合并、校验和索引功能。**v3.1.0 引入并行加速，显著提升大目录处理速度。**
 
-📖 **文档导航**: [用户指南](./docs/user-guide.md) | [开发者指南](./docs/developer-guide.md) | [发布说明](./docs/release-notes/v3.0.md) | [更新日志](./CHANGELOG.md)
+📖 **文档导航**: [用户指南](./docs/user-guide.md) | [开发者指南](./docs/developer-guide.md) | [发布说明](./docs/release-notes/v3.1.0.md) | [更新日志](./CHANGELOG.md)
 
 ## 功能特性
 
@@ -180,7 +180,7 @@ KB-Folder-Manager/
 ### 主要文档
 - **[用户指南](./docs/user-guide.md)** - 完整的用户使用手册（含安装、配置、GUI、CLI）
 - **[开发者指南](./docs/developer-guide.md)** - 开发文档（含架构、测试、贡献指南）
-- **[发布说明 v3.0](./docs/release-notes/v3.0.md)** - v3.0 版本更新详情
+- **[发布说明 v3.1.0](./docs/release-notes/v3.1.0.md)** - v3.1.0 版本更新详情
 - **[更新日志](./CHANGELOG.md)** - 完整的版本更新记录
 
 ### 历史文档
@@ -192,7 +192,7 @@ KB-Folder-Manager/
 详细问题解答请参考 [用户指南 - 常见问题章节](./docs/user-guide.md#常见问题)。
 
 **快速答案**：
-- **如何处理大量文件？** - 可以分批处理，或使用 `--force` 参数
+- **如何处理大量文件？** - v3.1.0 已支持并行加速；可通过 `KBFM_MAX_WORKERS` 调整并发度
 - **占位符的作用？** - 标记原始位置，避免合并时出现问题
 - **如何验证正确性？** - 查看生成的 `.kb_index.json` 索引文件
 - **其他操作系统？** - 主要针对 Windows，Linux/Mac 可尝试但需调整
@@ -221,6 +221,16 @@ Created by buptanswer
 
 ## 更新日志
 
+### v3.1.0 (2026-02-11)
+- 🚀 **并行性能优化（CPU 利用率提升）**
+  - 索引阶段支持多线程并行哈希计算，自动按 CPU 核心数分配 worker
+  - Split/Merge 文件复制改为并行执行，提升大批量文件吞吐
+  - 双目录索引场景（Doc/Res、Compare）改为并行构建
+  - 新增 `KBFM_MAX_WORKERS` 环境变量，可手动控制并行度
+- 🧩 **版本管理优化**
+  - 新增统一版本常量 `kb_folder_manager.__version__`
+  - GUI 标题与测试输出改为引用统一版本号
+
 ### v3.0 (2026-01-30)
 - 🎉 **新增图形用户界面 (GUI)**
   - 基于 ttkbootstrap 的现代化界面设计
@@ -248,4 +258,4 @@ Created by buptanswer
 
 ---
 
-**最后更新：** 2026年1月30日 | **版本：** v3.0
+**最后更新：** 2026年2月11日 | **版本：** v3.1.0

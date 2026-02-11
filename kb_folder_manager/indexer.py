@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import datetime as _dt
 from pathlib import Path
 
@@ -11,23 +12,44 @@ from .utils import (
     hash_file,
     iter_walk,
     rel_path_key,
+    resolve_worker_count,
     write_json,
 )
 
 
-def build_index(root: Path, placeholder_suffix: str, hash_algorithm: str, logger: Logger | None = None) -> dict:
+def _index_single_file(root: Path, fpath: Path, hash_algorithm: str) -> tuple[str, dict]:
+    size = file_size(fpath)
+    mtime = file_mtime(fpath)
+    return rel_path_key(root, fpath), {
+        'kind': 'file',
+        'size': size,
+        'mtime': mtime,
+        'hash': hash_file(fpath, hash_algorithm),
+        'hash_alg': hash_algorithm,
+    }
+
+
+def build_index(
+    root: Path,
+    placeholder_suffix: str,
+    hash_algorithm: str,
+    logger: Logger | None = None,
+    max_workers: int | None = None,
+) -> dict:
     files: dict[str, dict] = {}
     dirs: dict[str, dict] = {}
     placeholders: dict[str, dict] = {}
-    progress_every = 10  # Reduced from 200 to 10 for more frequent GUI updates
-    file_count = 0
+    progress_every = 10
     dir_count = 0
     placeholder_count = 0
+    file_paths: list[Path] = []
 
     if logger:
         logger.info(f'indexing started: {root}')
 
-    for rel_root, current_norm, dirs_list, files_list, placeholder_dirs in iter_walk(root, placeholder_suffix):
+    for rel_root, current_norm, dirs_list, files_list, placeholder_dirs in iter_walk(
+        root, placeholder_suffix
+    ):
         if rel_root != Path('.'):
             key = rel_root.as_posix()
             dirs[key] = {'kind': 'dir'}
@@ -44,26 +66,42 @@ def build_index(root: Path, placeholder_suffix: str, hash_algorithm: str, logger
             }
             placeholder_count += 1
         for fname in files_list:
-            fpath = current_norm / fname
+            file_paths.append(current_norm / fname)
+
+    total_files = len(file_paths)
+    workers = min(resolve_worker_count(max_workers), total_files) if total_files > 0 else 1
+    if logger:
+        logger.info(
+            f'indexing queue prepared: files={total_files} dirs={dir_count} placeholders={placeholder_count} workers={workers}'
+        )
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_map = {
+            executor.submit(_index_single_file, root, fpath, hash_algorithm): fpath
+            for fpath in file_paths
+        }
+        for done_count, future in enumerate(as_completed(future_map), start=1):
+            fpath = future_map[future]
             try:
-                size = file_size(fpath)
-                mtime = file_mtime(fpath)
-                files[rel_path_key(root, fpath)] = {
-                    'kind': 'file',
-                    'size': size,
-                    'mtime': mtime,
-                    'hash': hash_file(fpath, hash_algorithm),
-                    'hash_alg': hash_algorithm,
-                }
-                file_count += 1
-                if logger and file_count % progress_every == 0:
-                    logger.info(
-                        f'indexing progress: files={file_count} dirs={dir_count} placeholders={placeholder_count}'
-                    )
+                rel_key, file_entry = future.result()
             except Exception as exc:
                 if logger:
                     logger.error(f'failed to index file: {fpath} ({exc})')
                 raise
+            files[rel_key] = file_entry
+            if logger and (done_count % progress_every == 0 or done_count == total_files):
+                logger.info(
+                    f'indexing progress: files={done_count}/{total_files} dirs={dir_count} placeholders={placeholder_count}'
+                )
+
+    files = dict(sorted(files.items()))
+    dirs = dict(sorted(dirs.items()))
+    placeholders = dict(sorted(placeholders.items()))
+
+    if logger:
+        logger.info(
+            f'indexing complete: files={total_files} dirs={dir_count} placeholders={placeholder_count}'
+        )
 
     return {
         'files': files,
@@ -74,10 +112,6 @@ def build_index(root: Path, placeholder_suffix: str, hash_algorithm: str, logger
             'generated_at': _dt.datetime.now().isoformat(timespec='seconds'),
         },
     }
-    if logger:
-        logger.info(
-            f'indexing complete: files={file_count} dirs={dir_count} placeholders={placeholder_count}'
-        )
 
 
 def write_index(path: Path, index: dict) -> None:

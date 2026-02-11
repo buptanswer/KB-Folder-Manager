@@ -13,7 +13,7 @@ Then follow this checklist:
 
 ## GUI Launch Test
 [ ] GUI window opens without errors
-[ ] Window title shows "KB Folder Manager v3.0"
+[ ] Window title shows "KB Folder Manager v3.1.0"
 [ ] All 5 tabs are visible: Split, Merge, Validate, Index, Settings
 
 ## Split Tab Test

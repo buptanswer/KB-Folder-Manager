@@ -14,6 +14,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from kb_folder_manager import __version__
 from kb_folder_manager.config import Config
 from kb_folder_manager.operations import (
     split_operation,
@@ -31,7 +32,7 @@ class GUITestSimulator:
         self.test_results: list[tuple[str, bool, str]] = []
         self.test_counter = 0  # Counter for unique test folders
         print(f"\n{'='*70}")
-        print(f"GUI Test Simulator - KB Folder Manager v3.0")
+        print(f"GUI Test Simulator - KB Folder Manager v{__version__}")
         print(f"{'='*70}")
         print(f"Test Root: {self.test_root}\n")
         
