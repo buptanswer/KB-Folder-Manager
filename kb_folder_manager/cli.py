@@ -71,7 +71,7 @@ def main() -> int:
             elif args.mode == 'mutual':
                 if not args.doc or not args.res:
                     raise FatalError('validate mode mutual requires --doc and --res')
-                validate_mutual_operation(args.doc, args.res, config, log_dir)
+                validate_mutual_operation(args.doc, args.res, config, log_dir, args.yes)
             elif args.mode == 'compare':
                 if not args.old or not args.new:
                     raise FatalError('validate mode compare requires --old and --new')

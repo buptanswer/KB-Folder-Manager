@@ -4,6 +4,40 @@
 
 完整的发布说明请查看：[docs/release-notes/](./docs/release-notes/)
 
+## [3.2.0] - 2026-02-12
+
+### 新增
+- **Compare 批量修复闭环工作流** 🎯
+  - GUI 新增 `Repair` 标签页，支持在 `Validate -> Compare` 后直接跳转修复
+  - 支持按问题类型筛选、批量多选路径、选择策略后一键修复
+  - 支持的核心修复策略：
+    - `mtime differs but hash same`：old->new / new->old 对齐 mtime
+    - `content mismatch`（统一 size/hash）：old 覆盖 new / new 覆盖 old
+    - `missing file in new`、`extra file in new`：复制补齐或按基准删除
+    - `missing/extra dir`、`missing/extra placeholder`：创建对应目录或删除空目录
+  - 扩展到 `Validate(mutual/class2)` 与 `Split/Merge` 失败场景：可自动生成修复建议并跳转 Repair
+
+### 改进
+- **Compare 结构化问题模型** 🧩
+  - 新增结构化 Compare issue 收集逻辑，统一日志输出与 GUI 修复入口
+  - Compare 问题新增目录与占位符差异的逐项记录
+- **Repair 交互细节打磨**
+  - 修复列表增加两侧 `size / mtime / hash` 摘要列
+  - 新增单条问题详情区与策略建议，减少手动切到资源管理器比对
+  - 修复完成后即时移除当前已修复项（不强制重跑 Compare）
+  - Compare 的 mtime 判断增加 1 秒容差，降低亚秒级误报
+  - Compare 阶段补充进行中动画和开始日志，避免“点击后无反馈”
+  - 新增 `doc/res` 修复策略：错侧文件搬移、缺失占位符补齐、孤立占位符删除
+  - 新增 `complete` 修复策略：占位符后缀命名清理、符号链接删除
+  - `doc/res` 根目录名不一致改为“提示并确认后可继续”，并统一为 Doc 侧名称作为合并输出目录名
+- **GUI 线程结果能力增强**
+  - 后台任务结果支持携带结构化返回值，便于执行后续自动流程（如跳转修复页）
+
+### 测试
+- 新增 `tests/test_compare_repair.py`
+  - 覆盖 Compare 问题识别
+  - 覆盖批量修复（mtime 对齐、覆盖修复、缺失/多余修复）
+
 ## [3.1.0] - 2026-02-11
 
 ### 改进

@@ -39,7 +39,6 @@ def build_index(
     files: dict[str, dict] = {}
     dirs: dict[str, dict] = {}
     placeholders: dict[str, dict] = {}
-    progress_every = 10
     dir_count = 0
     placeholder_count = 0
     file_paths: list[Path] = []
@@ -70,6 +69,7 @@ def build_index(
 
     total_files = len(file_paths)
     workers = min(resolve_worker_count(max_workers), total_files) if total_files > 0 else 1
+    progress_every = max(10, total_files // 200) if total_files > 0 else 10
     if logger:
         logger.info(
             f'indexing queue prepared: files={total_files} dirs={dir_count} placeholders={placeholder_count} workers={workers}'

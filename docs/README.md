@@ -15,7 +15,8 @@ KB-Folder-Manager/
 │   ├── developer-guide.md          # 开发者指南
 │   └── release-notes/
 │       ├── v3.0.md                 # 版本发布说明（历史）
-│       └── v3.1.0.md               # 最新版本发布说明
+│       ├── v3.1.0.md               # 历史版本发布说明
+│       └── v3.2.0.md               # 最新版本发布说明
 └── KB-Folder-Manager项目文档/      # 历史文档（保留）
     └── ...
 ```

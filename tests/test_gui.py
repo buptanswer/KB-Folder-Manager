@@ -10,9 +10,14 @@ This script performs automated testing of the KB Folder Manager GUI by:
 from __future__ import annotations
 
 import shutil
+import sys
 import tempfile
 import time
 from pathlib import Path
+
+# Add project root to path for direct script execution
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
 from kb_folder_manager import __version__
 from kb_folder_manager.config import Config
@@ -387,7 +392,7 @@ use_7zip: false
         failed = len(self.test_results) - passed
         
         for test_name, success, message in self.test_results:
-            status = "✓ PASS" if success else "✗ FAIL"
+            status = "PASS" if success else "FAIL"
             self.log(f"{status}: {test_name} - {message}", "SUMMARY")
             
         self.log(f"\nTotal: {len(self.test_results)} tests", "SUMMARY")
@@ -397,9 +402,9 @@ use_7zip: false
         self.log("="*70, "SUMMARY")
         
         if failed == 0:
-            self.log("\n🎉 All tests PASSED! GUI is ready for use.", "SUCCESS")
+            self.log("\nAll tests PASSED! GUI is ready for use.", "SUCCESS")
         else:
-            self.log(f"\n⚠️ {failed} test(s) FAILED! Please review errors above.", "ERROR")
+            self.log(f"\n{failed} test(s) FAILED! Please review errors above.", "ERROR")
             
     def cleanup(self) -> None:
         """Clean up test files."""

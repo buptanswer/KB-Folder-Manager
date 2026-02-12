@@ -2,7 +2,7 @@
 
 > 完整的开发文档，涵盖架构、测试、贡献指南
 
-**版本**: 3.1.0 | **更新日期**: 2026-02-11
+**版本**: 3.2.0 | **更新日期**: 2026-02-12
 
 ---
 
@@ -27,6 +27,7 @@ KB Folder Manager 是一个用于个人知识库管理的 Windows/Python 工具�
 - **Split** - 将 Complete 目录拆分成 Doc（文档）和 Res（资源）
 - **Merge** - 将 Doc 和 Res 目录合并回 Complete
 - **Validate** - 验证文件夹结构是否符合规范
+- **Repair** - 对 Compare、Validate 与 Split/Merge 前置校验问题执行批量修复
 - **Index** - 生成带哈希值和元数据的索引文件
 
 ### 技术栈
@@ -105,42 +106,48 @@ python -m unittest discover tests
 KB-Folder-Manager/
 ├── kb_folder_manager/          # 核心包
 │   ├── __init__.py             # 包初始化
-│   ├── operations.py           # 核心业务逻辑（288 行）
-│   ├── utils.py                # 工具函数（122 行）
-│   ├── cli.py                  # 命令行接口（93 行）
-│   └── gui.py                  # 图形界面（873 行）
+│   ├── cli.py                  # 命令行入口参数解析
+│   ├── config.py               # 配置读取与校验
+│   ├── gui.py                  # GUI（Split/Merge/Validate/Repair/Index）
+│   ├── indexer.py              # 索引构建与写出
+│   ├── operations.py           # 业务编排层（含 Compare/Repair API）
+│   ├── utils.py                # 通用工具与日志封装
+│   └── validator.py            # Class1/Class2/Mutual/Compare 校验
 ├── kb_folder_manager.py        # CLI 入口
 ├── kb_folder_manager_gui.py    # GUI 入口
 ├── config.yaml                 # 配置文件
 ├── requirements.txt            # 依赖清单
 ├── tests/                      # 测试目录
 │   ├── test_basic.py
+│   ├── test_compare_repair.py
 │   ├── test_gui.py
+│   ├── test_gui_batch_repair_flow.py
 │   ├── test_gui_launch.py
-│   └── create_test_data_for_gui.py
+│   └── test_progress_feedback.py
 ├── docs/                       # 文档
 │   ├── user-guide.md           # 用户指南
 │   ├── developer-guide.md      # 开发者指南（本文档）
 │   └── release-notes/          # 发布说明
 │       ├── v3.0.md
-│       └── v3.1.0.md
+│       ├── v3.1.0.md
+│       └── v3.2.0.md
 ├── CHANGELOG.md                # 更新日志
 └── README.md                   # 项目说明
 ```
 
 ### 架构设计原则
 
-1. **模块分离**: 核心业务逻辑与接口（CLI/GUI）完全分离
-2. **非侵入性**: GUI 作为包装层，不修改任何后端代码
-3. **闭环流程**: 所有操作遵循"预检 → 确认 → 执行 → 后检"流程
-4. **线程安全**: GUI 操作使用独立线程，避免界面冻结
+1. **接口与业务分离**：`cli.py/gui.py` 只做输入输出与调度，规则在 `validator.py` 和 `operations.py`。
+2. **统一 Repair 模型**：Compare/Validate/Pre-check 问题统一为结构化 issue，GUI 与后端共享同一套策略调度。
+3. **闭环流程**：操作遵循“预检/分析 → 用户确认 → 执行 → 结果反馈”。
+4. **响应优先**：GUI 后台线程执行任务，主线程只做渲染与状态更新。
 
 ### 模块依赖关系
 
 ```
-kb_folder_manager_gui.py ─→ gui.py ─┐
-kb_folder_manager.py ─────→ cli.py ─┼─→ operations.py ─→ utils.py
-                                     └─→ utils.py
+kb_folder_manager_gui.py ─→ gui.py ─┬─→ operations.py ─┬─→ validator.py
+kb_folder_manager.py ─────→ cli.py ─┘                  ├─→ indexer.py
+                                                        └─→ utils.py/config.py
 ```
 
 ---
@@ -149,111 +156,74 @@ kb_folder_manager.py ─────→ cli.py ─┼─→ operations.py ─→
 
 ### operations.py（核心业务逻辑）
 
-**职责**: 实现所有核心操作（Split、Merge、Validate、Index）
+**职责**：封装可复用操作 API（CLI 与 GUI 共用）。
 
-**主要类**:
+**主要入口函数**：
+- `split_operation(...)`
+- `merge_operation(...)`
+- `validate_operation(...)`
+- `validate_mutual_operation(...)`
+- `analyze_compare_operation(...)`
+- `apply_compare_fixes(...)`
+- `index_operation(...)`
 
-- `OperationContext`: 操作上下文数据类
-- `KBFolderOperations`: 核心操作类
+**行为约定（与当前实现一致）**：
+- `merge_operation(...)` 在 `doc/res` 根目录名不一致时不再直接阻断，而是先告警并要求确认
+- 若用户确认继续，合并输出目录名称默认采用 `doc_path.name`
+- `validate_mutual_operation(...)` 在名称不一致时会触发同类确认逻辑（`auto_yes=False` 时）
+- CLI 可通过全局参数 `--yes`（需位于子命令前）跳过确认；GUI 通过弹窗回调确认
+- 当前 GUI 的 Mutual 校验调用使用 `auto_yes=True`，即记录 warning 后继续（不弹确认框）
 
-**关键方法**:
+**关键数据结构**：
+- `CompareAnalysisResult`：Compare 输出（问题列表、路径、日志路径）
+- `CompareFixResult`：Repair 输出（applied/skipped/failed/applied_paths）
 
-```python
-class KBFolderOperations:
-    def split(self, source, output_root, force=False, auto_confirm=False):
-        """拆分 Complete 目录为 Doc 和 Res"""
-    
-    def merge(self, doc_path, res_path, output_root, force=False, auto_confirm=False):
-        """合并 Doc 和 Res 为 Complete"""
-    
-    def validate(self, mode, **kwargs):
-        """验证文件夹结构"""
-    
-    def index(self, target_folder, output_index_file, log_dir=None):
-        """生成索引文件"""
-```
+### validator.py（规则与问题分类）
 
-**设计模式**: 策略模式（Validate 有 4 种验证模式）
+**职责**：定义校验规则与 Compare 问题类型。
+
+**核心能力**：
+- `validate_class1` / `validate_class2` / `validate_mutual`
+- `collect_compare_issues` / `group_compare_issues_by_type`
+- `emit_compare_issue_logs`
+
+**当前 Compare 分类要点**：
+- 内容差异统一为 `content_mismatch`（不再拆 `size/hash` 双错误）
+- `mtime_diff_hash_same` 使用 1 秒容差，避免亚秒抖动误报
+- 目录/占位符差异独立建模，可直接进入批量修复
 
 ### utils.py（工具函数）
 
-**职责**: 提供通用工具函数
+**职责**：提供日志、文件系统与路径相关基础能力（如 `Logger`、哈希计算、拷贝、路径工具）。
 
-**主要函数**:
+### indexer.py（索引构建）
 
-```python
-def compute_hash(file_path, algorithm="sha256"):
-    """计算文件哈希值"""
-
-def is_specified_type(filename, specified_types):
-    """判断文件是否为指定类型"""
-
-def is_placeholder(name, suffix):
-    """判断是否为占位符文件夹"""
-
-def normalize_path(path):
-    """路径规范化"""
-```
+**职责**：扫描目录并生成结构化索引（`files/dirs/placeholders/metadata`）。
 
 ### cli.py（命令行接口）
 
-**职责**: 解析命令行参数，调用 operations 模块
+**职责**：解析命令并调用 `operations.py`。
 
-**实现**: 使用 `argparse` 构建子命令系统
-
-**子命令**:
+**子命令**：
 - `split` - 拆分操作
 - `merge` - 合并操作
 - `validate` - 验证操作
 - `index` - 索引操作
 
-**示例**:
-```python
-def run_split(args):
-    ops = KBFolderOperations(args.config)
-    ops.split(args.source, args.output_root, args.force, args.yes)
-```
-
 ### gui.py（图形界面）
 
-**职责**: 提供现代化的图形用户界面
+**职责**：提供交互层与可视化反馈。
 
-**架构设计**:
+**关键组件**：
+1. `OperationThread`：后台执行任务并通过队列回传结果。
+2. `LogCapture` / `MultiLogCapture`：将 stdout/stderr 转为 GUI 日志、进度与状态。
+3. `KBFolderManagerGUI`：管理 6 个标签页与跨流程 Repair 闭环。
 
-1. **OperationThread**: 独立线程运行后端操作
-   ```python
-   class OperationThread(threading.Thread):
-       def run(self):
-           result = self.func(*self.args, **self.kwargs)
-           self.result_queue.put(result)
-   ```
-
-2. **LogCapture**: 捕获日志输出到 GUI
-   ```python
-   class LogCapture:
-       def write(self, text):
-           self.log_widget.insert(tk.END, text)
-   ```
-
-3. **KBFolderManagerGUI**: 主窗口类
-   - 5 个标签页：Split, Merge, Validate, Index, Settings
-   - 实时日志输出
-   - 进度条显示
-
-**关键代码**:
-```python
-class KBFolderManagerGUI:
-    def __init__(self, master):
-        self.notebook = ttk.Notebook(master)
-        self.create_split_tab()
-        self.create_merge_tab()
-        # ... 其他标签页
-    
-    def execute_operation(self, operation_func, *args):
-        thread = OperationThread(operation_func, *args)
-        thread.start()
-        self.check_operation_status(thread)
-```
+**当前交互特性**：
+- 共享进度条 + 状态动画 + `Activity` 动态指示
+- Validate 页内联日志框
+- Compare 结束自动切 Repair；Mutual/Class2/Split/Merge 失败时也可自动切 Repair
+- Repair 支持按问题类型多选批量修复，并即时移除已修复项（不强制重跑分析）
 
 ---
 
@@ -262,52 +232,51 @@ class KBFolderManagerGUI:
 ### 运行测试
 
 ```bash
-# 运行所有测试
+# 1) 运行单元测试（含 CLI 烟雾）
 python -m unittest discover tests
 
-# 运行单个测试文件
-python tests/test_basic.py
+# 2) GUI 启动烟雾
+python tests/test_gui_launch.py
+
+# 3) GUI 功能模拟（Split/Merge/Validate/Index）
 python tests/test_gui.py
 
-# GUI 启动测试
-python tests/test_gui_launch.py
+# 4) GUI 批量修复全流程（模拟用户事件）
+python tests/test_gui_batch_repair_flow.py
+
+# 5) GUI 进度与状态反馈验证
+python tests/test_progress_feedback.py
 ```
 
 ### 测试文件说明
 
 #### test_basic.py
 - 基础功能测试
-- 文件系统操作测试
-- 配置加载测试
+- Split/Merge 核心回归
+
+#### test_cli_smoke.py
+- CLI 入口烟雾测试
+- 覆盖 `--help`、`validate compare` 错误码、`index` 成功路径
 
 #### test_gui.py
-- GUI 后端集成测试
-- 模拟用户点击操作
-- 验证所有操作正确性
-- **不启动真实 GUI 窗口**
+- GUI 相关后端流程模拟测试（Split/Merge/Validate/Index）
 
-**测试用例**:
-```python
-def test_01_load_config(self):
-    """测试配置加载"""
+#### test_compare_repair.py
+- Compare + 非 Compare（doc/res、complete）问题识别与批量修复单元测试
+- 覆盖 `content_mismatch`、`mtime_diff_hash_same`、missing/extra/placeholder、doc/res 与 complete 场景
 
-def test_02_split_operation(self):
-    """测试 Split 操作"""
-
-def test_03_merge_operation(self):
-    """测试 Merge 操作"""
-
-def test_04_validate_operation(self):
-    """测试 Validate 操作"""
-
-def test_05_index_operation(self):
-    """测试 Index 操作"""
-```
+#### test_gui_batch_repair_flow.py
+- 模拟 GUI 批量修复闭环：Compare、Mutual、Split 前置校验失败后进入 Repair
+- 验证策略下拉是否完整、修复后列表是否即时移除
 
 #### test_gui_launch.py
 - 启动 GUI 窗口
 - 3 秒后自动关闭
 - 验证没有启动错误
+
+#### test_gui_log_capture.py
+- 验证日志捕获器在状态回调写日志时不发生递归
+- 保障“进行中动画/状态文本”稳定更新
 
 #### create_test_data_for_gui.py
 - 创建测试数据
@@ -327,6 +296,16 @@ python tests/create_test_data_for_gui.py
 - 错误处理测试
 - 边界条件测试
 
+### 本次回归基线（2026-02-12）
+
+以下命令已完整执行并通过（版本号保持 `3.2.0`）：
+- `python -m py_compile kb_folder_manager\*.py tests\*.py`（按文件逐个展开执行）
+- `python -m unittest discover tests -v`
+- `python tests/test_gui_launch.py`
+- `python tests/test_gui.py`
+- `python tests/test_gui_batch_repair_flow.py`
+- `python tests/test_progress_feedback.py`
+
 ---
 
 ## 代码规范
@@ -338,8 +317,8 @@ python tests/create_test_data_for_gui.py
 - 缩进：4 个空格
 - 行宽：最大 88 字符（Black 默认）
 - 命名：
-  - 类名：PascalCase（如 `KBFolderOperations`）
-  - 函数/变量：snake_case（如 `compute_hash`）
+  - 类名：PascalCase（如 `KBFolderManagerGUI`）
+  - 函数/变量：snake_case（如 `collect_compare_issues`）
   - 常量：UPPER_SNAKE_CASE（如 `DEFAULT_CONFIG`）
 
 ### 注释规范
@@ -490,7 +469,7 @@ Docs: 更新安装文档
 
 ### 关键约束
 
-1. **Complete 目录严格只读**
+1. **Complete 默认不改动；仅在 Repair 中用户确认后执行改动**
 2. **占位符后缀是保留标记**
 3. **文件类型识别基于最后一个后缀**
 4. **禁止使用 UNC 网络路径**
@@ -511,4 +490,4 @@ Docs: 更新安装文档
 
 ---
 
-**最后更新**: 2026-02-11 | **版本**: 3.1.0
+**最后更新**: 2026-02-12 | **版本**: 3.2.0

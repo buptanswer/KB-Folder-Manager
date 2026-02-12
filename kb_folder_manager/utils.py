@@ -5,10 +5,11 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 INVALID_NAME_CHARS = set('\\/:*?"<>|')
 RESERVED_NAMES = {
@@ -67,7 +68,8 @@ def file_mtime(path: Path) -> float:
 def hash_file(path: Path, algorithm: str) -> str:
     h = hashlib.new(algorithm)
     with open(to_extended_path(path), 'rb') as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b''):
+        # Larger chunks reduce Python loop overhead for big-file hashing.
+        for chunk in iter(lambda: f.read(4 * 1024 * 1024), b''):
             h.update(chunk)
     return h.hexdigest()
 
@@ -89,7 +91,8 @@ def resolve_worker_count(override: Optional[int] = None) -> int:
         return env_workers
 
     cpu_count = os.cpu_count() or 1
-    return max(2, cpu_count)
+    # Slightly oversubscribe to keep CPU busy in mixed I/O + hashing workloads.
+    return max(2, min(64, cpu_count + max(1, cpu_count // 2)))
 
 
 def copy_file(src: Path, dst: Path) -> None:
@@ -154,6 +157,7 @@ class Logger:
         self.also_console = also_console
         ensure_dir(log_path.parent)
         self._fh = open(to_extended_path(log_path), 'w', encoding='utf-8')
+        self._lock = threading.Lock()
         self.result = LogResult()
 
     def close(self) -> None:
@@ -163,16 +167,17 @@ class Logger:
 
     def _write(self, level: str, message: str) -> None:
         line = f'[{level}] {message}'
-        self._fh.write(line + '\n')
-        self._fh.flush()
-        if self.also_console:
-            print(line)
-        if level == 'WARNING':
-            self.result.warnings += 1
-        elif level == 'ERROR':
-            self.result.errors += 1
-        elif level == 'FATAL':
-            self.result.fatals += 1
+        with self._lock:
+            self._fh.write(line + '\n')
+            self._fh.flush()
+            if self.also_console:
+                print(line)
+            if level == 'WARNING':
+                self.result.warnings += 1
+            elif level == 'ERROR':
+                self.result.errors += 1
+            elif level == 'FATAL':
+                self.result.fatals += 1
 
     def info(self, message: str) -> None:
         self._write('INFO', message)
@@ -249,11 +254,19 @@ def abort_if_blockers(logger: Logger, action: str) -> None:
         raise FatalError(f'{action} blocked due to errors; see log: {logger.log_path}')
 
 
-def prompt_confirm(message: str, auto_yes: bool) -> None:
+def prompt_confirm(
+    message: str,
+    auto_yes: bool,
+    confirm_callback: Callable[[str], bool] | None = None,
+) -> None:
     if auto_yes:
         return
+    if confirm_callback is not None:
+        if confirm_callback(message):
+            return
+        raise FatalError('operation cancelled by user')
     resp = input(f'{message} (y/N): ').strip().lower()
-    if resp != 'y':
+    if resp not in ('y', 'yes'):
         raise FatalError('operation cancelled by user')
 
 

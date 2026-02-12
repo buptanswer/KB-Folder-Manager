@@ -2,7 +2,7 @@
 
 > 完整的用户使用手册，涵盖安装、配置、GUI 和 CLI 使用
 
-**版本**: 3.1.0 | **更新日期**: 2026-02-11
+**版本**: 3.2.0 | **更新日期**: 2026-02-12
 
 ---
 
@@ -26,11 +26,12 @@ KB Folder Manager 是一个专为个人知识库整理设计的工具，提供�
 - **Split（拆分）** - 将 Complete 目录拆分成 Doc（文档）和 Res（资源）
 - **Merge（合并）** - 将 Doc 和 Res 目录合并回 Complete
 - **Validate（校验）** - 验证文件夹结构是否符合规范
+- **Repair（修复）** - 对 Compare、Validate、Split/Merge 前置校验发现的问题进行批量修复
 - **Index（索引）** - 生成带哈希值和元数据的索引文件
 
 ### 核心设计原则
 
-- **Complete 目录严格只读** - 保护原始数据完整性
+- **默认保护原目录** - 仅在用户显式选择修复策略并确认后才修改文件
 - **占位符机制** - 使用空文件夹标记被移走的文件
 - **闭环操作流程** - 预检 → 用户确认 → 执行 → 后检
 - **哈希校验** - 支持多种哈希算法（默认 SHA256）
@@ -43,7 +44,7 @@ KB Folder Manager 是一个专为个人知识库整理设计的工具，提供�
 
 - Python 3.10 或更高版本
 - Windows 操作系统（主要支持），Linux/Mac（基本支持）
-- 7-Zip（可选，用于压缩功能）
+- 7-Zip（可选，当前核心流程不依赖）
 
 ### 安装步骤
 
@@ -119,7 +120,7 @@ placeholder_suffix: "(在百度网盘)"
 # 哈希算法
 hash_algorithm: "sha256"
 
-# 是否使用 7-Zip
+# 是否启用 7-Zip 相关扩展（当前核心流程未使用）
 use_7zip: true
 ```
 
@@ -127,7 +128,7 @@ use_7zip: true
 
 - `specified_types` 必须为小写并包含点号前缀
 - `placeholder_suffix` 是保留标记，真实目录名严禁以该后缀结尾
-- 修改配置后重启程序生效
+- CLI 场景修改配置后需重启；GUI 可在 `Settings` 页面重载配置
 
 ---
 
@@ -169,7 +170,7 @@ GUI 采用多标签页设计：
 2. 选择输出目录
 3. 根据需要勾选选项
 4. 点击 "Execute Split Operation"
-5. 观察进度条和日志输出
+5. 观察底部全局日志 + Split 页内联日志（`Split Log (Current Tab)`）
 
 **预期结果**：
 ```
@@ -189,13 +190,18 @@ OutputRoot/
 - **Res Folder** - Res 文件夹路径
 - **Output Root** - 输出根目录
 
-**重要**：Doc 和 Res 文件夹名称必须完全一致！
+**重要**：Doc 和 Res 文件夹名称不一致时，程序会给出风险提示并要求确认；确认后可继续执行（用于同一知识库但命名不同的场景）。
 
 **操作步骤**：
 1. 分别选择 Doc 和 Res 文件夹
 2. 选择输出目录
 3. 点击 "Execute Merge Operation"
-4. 查看合并结果
+4. 查看底部全局日志 + Merge 页内联日志（`Merge Log (Current Tab)`）
+5. 若出现确认弹窗，可选择继续或取消（无需开启 Auto-confirm）
+
+**输出命名规则**：
+- 当 Doc 与 Res 同名时：输出为该名称
+- 当 Doc 与 Res 不同名且确认继续时：输出目录名称默认使用 Doc 侧名称
 
 #### 3. Validate（校验）标签页
 
@@ -216,6 +222,8 @@ OutputRoot/
 - **Mutual** - Doc/Res 相互一致性
   - 结构互为镜像
   - 占位符与文件互补
+  - 当 Doc/Res 根目录名不一致时会提示风险
+  - CLI 默认会询问是否继续；GUI 当前版本会记录 warning 后继续执行
 
 - **Compare** - 新旧对比
   - 哈希值和大小一致
@@ -226,9 +234,37 @@ OutputRoot/
 2. 填写相应输入字段
 3. 指定日志目录
 4. 点击 "Execute Validation"
-5. 查看日志输出
+5. 查看底部全局日志 + Validate 页内联日志（`Validation Log (Current Tab)`）
 
-#### 4. Index（索引）标签页
+#### 4. Repair（修复）标签页
+
+对 Compare 与其他校验失败结果执行批量修复。
+
+**工作流**：
+1. 在 Validate 或 Split/Merge 中执行检查/前置校验
+2. 若发现可修复问题，程序会自动跳转到 Repair 标签页
+3. 选择问题类型（如 `mtime_diff_hash_same`、`content_mismatch`）
+4. 在列表中直接查看两侧文件的 `size / mtime / hash` 与提示
+5. 多选要处理的路径（支持批量）
+6. 选择修复策略并点击 `Apply to Selected`
+
+**可视化决策支持**：
+- 列表列包含：路径、文件夹1/2大小、文件夹1/2修改时间、文件夹1/2哈希、提示信息
+- 选中单条时，底部详情区显示完整 hash 与推荐策略（仅作建议，最终由用户决定）
+- 修复执行后会在当前结果集中即时移除已修复项（不强制重跑 Compare）
+- mtime 比对带 1 秒容差（避免仅亚秒级抖动造成误报）
+- Repair 页内联日志（`Repair Log (Current Tab)`）会同步显示修复执行细节
+- 若阶段耗时较长且暂无新日志，界面会输出轻量 `running...` 心跳，避免“无响应”误解
+
+**支持策略（按问题类型）**：
+- `mtime differs but hash same`：old->new / new->old 时间对齐
+- `content mismatch`（统一覆盖原 size/hash 双报错）：old 覆盖 new / new 覆盖 old
+- `missing/extra`：复制补齐或按基准侧删除
+- `missing/extra dir`、`missing/extra placeholder`：按侧创建目录或删除空目录
+- `doc/res` 结构修复：错侧文件搬移；缺失占位符可“补占位符”或“删除对应文件”；孤立占位符可批量删除（目录需为空）；目录结构差异可按侧批量创建或删除空目录
+- `complete` 预检修复：去除占位符后缀命名、删除符号链接
+
+#### 5. Index（索引）标签页
 
 生成文件夹索引。
 
@@ -242,6 +278,7 @@ OutputRoot/
 2. 指定索引文件保存位置
 3. 选择日志目录
 4. 点击 "Generate Index"
+5. 查看底部全局日志 + Index 页内联日志（`Index Log (Current Tab)`）
 
 **索引文件内容**：
 ```json
@@ -251,7 +288,8 @@ OutputRoot/
       "kind": "file",
       "size": 1234,
       "hash": "abc...",
-      "mtime": "2026-01-30T12:00:00"
+      "hash_alg": "sha256",
+      "mtime": 1769784000.123
     }
   },
   "dirs": {...},
@@ -260,7 +298,7 @@ OutputRoot/
 }
 ```
 
-#### 5. Settings（设置）标签页
+#### 6. Settings（设置）标签页
 
 配置管理。
 
@@ -274,7 +312,8 @@ OutputRoot/
 1. **批处理**：勾选 Auto-confirm 可跳过确认，适合自动化
 2. **错误排查**：查看日志输出区域的详细信息
 3. **日志保存**：所有操作在 `logs/` 目录保存详细日志
-4. **配置修改**：使用 Settings 标签页重载配置，无需重启
+4. **修复闭环**：Compare/Mutual/Class2/Split/Merge 前置校验失败后可直接进入 Repair 批量处理
+5. **配置修改**：使用 Settings 标签页重载配置，无需重启
 
 ### GUI 故障排除
 
@@ -304,6 +343,14 @@ pip install -r requirements.txt --upgrade
 
 ## 命令行使用
 
+### 全局参数位置说明
+
+- `--yes`、`--config` 是全局参数，需要写在子命令前。
+- 示例：
+  ```powershell
+  python kb_folder_manager.py --yes split --source "D:\Data\MyKB" --output-root "D:\Output\SplitRun"
+  ```
+
 ### Split（拆分）
 
 ```powershell
@@ -314,7 +361,7 @@ python kb_folder_manager.py split \
 
 **可选参数**：
 - `--force` - 输出目录非空时继续
-- `--yes` - 跳过确认提示
+- `--yes` - 全局参数，跳过确认提示（需写在子命令前）
 
 **输出结构**：
 ```
@@ -337,7 +384,10 @@ python kb_folder_manager.py merge \
   --output-root "D:\Output\MergeRun"
 ```
 
-**要求**：Doc 和 Res 的文件夹名必须一致
+**说明**：
+- Doc 和 Res 的文件夹名建议一致；若不一致，程序会先提示风险并要求确认，确认后可继续
+- 名称不一致时，输出目录名称默认使用 Doc 侧文件夹名
+- 命令行确认输入支持 `y` / `yes`；可加全局参数 `--yes` 跳过确认提示
 
 ### Validate（校验）
 
@@ -370,6 +420,10 @@ python kb_folder_manager.py validate \
   --new "D:\Output\complete\MyKB" \
   --log-dir "D:\Output\logs"
 ```
+
+**Mutual 名称不一致处理**：
+- CLI 默认会提示你确认是否继续
+- 如需无交互运行，可使用全局参数 `--yes`（放在子命令前）
 
 ### Index（索引）
 
@@ -502,6 +556,10 @@ A: 标记原始位置，避免合并时出现问题，保留占位符可完整�
 
 A: 每个操作生成索引文件（`.kb_index.json`），包含哈希值用于验证
 
+**Q: Compare / Mutual / Class2 / Split-Merge 前置校验发现大量共性问题，如何快速处理？**
+
+A: 失败后可自动进入 `Repair` 标签页，按问题类型筛选后批量多选路径，再选择统一修复策略执行。
+
 **Q: 可以在其他操作系统使用吗？**
 
 A: 主要针对 Windows 优化，Linux/Mac 可以尝试但某些功能可能需要调整
@@ -523,7 +581,7 @@ A: v3.1.0 已引入并行加速。可先确认使用最新版；如需手动调�
 ### 关键规则
 
 1. **禁止使用 UNC 网络路径**，必须使用本地路径
-2. **Complete 目录严格只读**，不进行任何修改
+2. **Complete 默认不改动**，仅在 Repair 中用户显式确认后执行修改
 3. **占位符后缀是保留标记**，真实文件夹不能以此结尾
 4. **文件类型识别基于最后一个后缀**（如 `.tar.gz` 识别为 `.gz`）
 
@@ -546,4 +604,4 @@ A: v3.1.0 已引入并行加速。可先确认使用最新版；如需手动调�
 
 ---
 
-**最后更新**: 2026-02-11 | **版本**: 3.1.0
+**最后更新**: 2026-02-12 | **版本**: 3.2.0

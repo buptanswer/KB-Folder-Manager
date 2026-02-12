@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from .config import Config
 from .indexer import build_index
@@ -15,6 +17,213 @@ from .utils import (
     path_has_invalid_components,
     safe_scandir,
 )
+
+COMPARE_ISSUE_MISSING_IN_NEW = 'missing_in_new'
+COMPARE_ISSUE_EXTRA_IN_NEW = 'extra_in_new'
+COMPARE_ISSUE_CONTENT_MISMATCH = 'content_mismatch'
+COMPARE_ISSUE_SIZE_MISMATCH = 'size_mismatch'
+COMPARE_ISSUE_HASH_MISMATCH = 'hash_mismatch'
+COMPARE_ISSUE_MTIME_DIFF_HASH_SAME = 'mtime_diff_hash_same'
+COMPARE_ISSUE_MISSING_DIR_IN_NEW = 'missing_dir_in_new'
+COMPARE_ISSUE_EXTRA_DIR_IN_NEW = 'extra_dir_in_new'
+COMPARE_ISSUE_MISSING_PLACEHOLDER_IN_NEW = 'missing_placeholder_in_new'
+COMPARE_ISSUE_EXTRA_PLACEHOLDER_IN_NEW = 'extra_placeholder_in_new'
+COMPARE_MTIME_TOLERANCE_SECONDS = 1.0
+
+COMPARE_FIXABLE_ISSUE_TYPES = {
+    COMPARE_ISSUE_MISSING_IN_NEW,
+    COMPARE_ISSUE_EXTRA_IN_NEW,
+    COMPARE_ISSUE_CONTENT_MISMATCH,
+    COMPARE_ISSUE_SIZE_MISMATCH,  # Backward compatible alias
+    COMPARE_ISSUE_HASH_MISMATCH,  # Backward compatible alias
+    COMPARE_ISSUE_MTIME_DIFF_HASH_SAME,
+    COMPARE_ISSUE_MISSING_DIR_IN_NEW,
+    COMPARE_ISSUE_EXTRA_DIR_IN_NEW,
+    COMPARE_ISSUE_MISSING_PLACEHOLDER_IN_NEW,
+    COMPARE_ISSUE_EXTRA_PLACEHOLDER_IN_NEW,
+}
+
+
+@dataclass(frozen=True)
+class CompareIssue:
+    issue_type: str
+    rel_path: str
+    severity: str
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+def collect_compare_issues(old_index: dict, new_index: dict) -> list[CompareIssue]:
+    issues: list[CompareIssue] = []
+    old_files = old_index.get('files', {})
+    new_files = new_index.get('files', {})
+
+    old_file_keys = set(old_files.keys())
+    new_file_keys = set(new_files.keys())
+
+    for rel_path in sorted(old_file_keys - new_file_keys):
+        old_entry = old_files[rel_path]
+        details = {
+            'old_exists': True,
+            'new_exists': False,
+            'old_size': old_entry.get('size'),
+            'new_size': None,
+            'old_hash': old_entry.get('hash'),
+            'new_hash': None,
+            'old_mtime': old_entry.get('mtime'),
+            'new_mtime': None,
+        }
+        issues.append(CompareIssue(COMPARE_ISSUE_MISSING_IN_NEW, rel_path, 'ERROR', details=details))
+    for rel_path in sorted(new_file_keys - old_file_keys):
+        new_entry = new_files[rel_path]
+        details = {
+            'old_exists': False,
+            'new_exists': True,
+            'old_size': None,
+            'new_size': new_entry.get('size'),
+            'old_hash': None,
+            'new_hash': new_entry.get('hash'),
+            'old_mtime': None,
+            'new_mtime': new_entry.get('mtime'),
+        }
+        issues.append(CompareIssue(COMPARE_ISSUE_EXTRA_IN_NEW, rel_path, 'ERROR', details=details))
+
+    common = old_file_keys & new_file_keys
+    for rel_path in sorted(common):
+        old_entry = old_files[rel_path]
+        new_entry = new_files[rel_path]
+        old_size = old_entry.get('size')
+        new_size = new_entry.get('size')
+        old_hash = old_entry.get('hash')
+        new_hash = new_entry.get('hash')
+        old_mtime = old_entry.get('mtime')
+        new_mtime = new_entry.get('mtime')
+        common_details = {
+            'old_exists': True,
+            'new_exists': True,
+            'old_size': old_size,
+            'new_size': new_size,
+            'old_hash': old_hash,
+            'new_hash': new_hash,
+            'old_mtime': old_mtime,
+            'new_mtime': new_mtime,
+        }
+
+        if old_size != new_size or old_hash != new_hash:
+            issues.append(
+                CompareIssue(
+                    COMPARE_ISSUE_CONTENT_MISMATCH,
+                    rel_path,
+                    'ERROR',
+                    details={
+                        **common_details,
+                        'size_delta': (old_size - new_size) if isinstance(old_size, int) and isinstance(new_size, int) else None,
+                        'size_equal': old_size == new_size,
+                        'hash_equal': old_hash == new_hash,
+                    },
+                )
+            )
+        elif (
+            isinstance(old_mtime, (int, float))
+            and isinstance(new_mtime, (int, float))
+            and abs(old_mtime - new_mtime) > COMPARE_MTIME_TOLERANCE_SECONDS
+        ):
+            issues.append(
+                CompareIssue(
+                    COMPARE_ISSUE_MTIME_DIFF_HASH_SAME,
+                    rel_path,
+                    'WARNING',
+                    details={
+                        **common_details,
+                        'mtime_delta_seconds': (
+                            old_mtime - new_mtime
+                            if isinstance(old_mtime, (int, float)) and isinstance(new_mtime, (int, float))
+                            else None
+                        ),
+                    },
+                )
+            )
+
+    old_dirs = set(old_index.get('dirs', {}).keys())
+    new_dirs = set(new_index.get('dirs', {}).keys())
+    for rel_path in sorted(old_dirs - new_dirs):
+        issues.append(
+            CompareIssue(
+                COMPARE_ISSUE_MISSING_DIR_IN_NEW,
+                rel_path,
+                'ERROR',
+                details={'old_exists': True, 'new_exists': False},
+            )
+        )
+    for rel_path in sorted(new_dirs - old_dirs):
+        issues.append(
+            CompareIssue(
+                COMPARE_ISSUE_EXTRA_DIR_IN_NEW,
+                rel_path,
+                'ERROR',
+                details={'old_exists': False, 'new_exists': True},
+            )
+        )
+
+    old_placeholders = set(old_index.get('placeholders', {}).keys())
+    new_placeholders = set(new_index.get('placeholders', {}).keys())
+    for rel_path in sorted(old_placeholders - new_placeholders):
+        issues.append(
+            CompareIssue(
+                COMPARE_ISSUE_MISSING_PLACEHOLDER_IN_NEW,
+                rel_path,
+                'ERROR',
+                details={'old_exists': True, 'new_exists': False},
+            )
+        )
+    for rel_path in sorted(new_placeholders - old_placeholders):
+        issues.append(
+            CompareIssue(
+                COMPARE_ISSUE_EXTRA_PLACEHOLDER_IN_NEW,
+                rel_path,
+                'ERROR',
+                details={'old_exists': False, 'new_exists': True},
+            )
+        )
+
+    return sorted(issues, key=lambda x: (x.issue_type, x.rel_path))
+
+
+def group_compare_issues_by_type(issues: list[CompareIssue]) -> dict[str, list[CompareIssue]]:
+    grouped: dict[str, list[CompareIssue]] = {}
+    for issue in issues:
+        grouped.setdefault(issue.issue_type, []).append(issue)
+    return grouped
+
+
+def emit_compare_issue_logs(issues: list[CompareIssue], logger: Logger) -> None:
+    for issue in issues:
+        if issue.issue_type == COMPARE_ISSUE_MISSING_IN_NEW:
+            logger.error(f'compare: missing file in new: {issue.rel_path}')
+        elif issue.issue_type == COMPARE_ISSUE_EXTRA_IN_NEW:
+            logger.error(f'compare: extra file in new: {issue.rel_path}')
+        elif issue.issue_type == COMPARE_ISSUE_CONTENT_MISMATCH:
+            logger.error(f'compare: content mismatch (size/hash): {issue.rel_path}')
+        elif issue.issue_type == COMPARE_ISSUE_SIZE_MISMATCH:
+            logger.error(f'compare: size mismatch: {issue.rel_path}')
+        elif issue.issue_type == COMPARE_ISSUE_HASH_MISMATCH:
+            logger.error(f'compare: hash mismatch: {issue.rel_path}')
+        elif issue.issue_type == COMPARE_ISSUE_MTIME_DIFF_HASH_SAME:
+            logger.warning(f'compare: mtime differs but hash same: {issue.rel_path}')
+        elif issue.issue_type == COMPARE_ISSUE_MISSING_DIR_IN_NEW:
+            logger.error(f'compare: missing dir in new: {issue.rel_path}')
+        elif issue.issue_type == COMPARE_ISSUE_EXTRA_DIR_IN_NEW:
+            logger.error(f'compare: extra dir in new: {issue.rel_path}')
+        elif issue.issue_type == COMPARE_ISSUE_MISSING_PLACEHOLDER_IN_NEW:
+            logger.error(f'compare: missing placeholder in new: {issue.rel_path}')
+        elif issue.issue_type == COMPARE_ISSUE_EXTRA_PLACEHOLDER_IN_NEW:
+            logger.error(f'compare: extra placeholder in new: {issue.rel_path}')
+        else:
+            if issue.severity == 'WARNING':
+                logger.warning(f'compare: {issue.issue_type}: {issue.rel_path}')
+            elif issue.severity == 'FATAL':
+                logger.fatal(f'compare: {issue.issue_type}: {issue.rel_path}')
+            else:
+                logger.error(f'compare: {issue.issue_type}: {issue.rel_path}')
 
 
 def _check_case_conflicts(root: Path, placeholder_suffix: str, logger: Logger) -> None:
@@ -171,51 +380,28 @@ def validate_mutual(doc_index: dict, res_index: dict, config: Config, logger: Lo
         missing_in_res = logical_doc - logical_res
         missing_in_doc = logical_res - logical_doc
         if missing_in_res:
-            logger.error(f'logical files missing in res: {len(missing_in_res)}')
+            logger.info(f'logical files missing in res (derived): {len(missing_in_res)}')
         if missing_in_doc:
-            logger.error(f'logical files missing in doc: {len(missing_in_doc)}')
+            logger.info(f'logical files missing in doc (derived): {len(missing_in_doc)}')
 
     doc_dirs = set(doc_index.get('dirs', {}).keys())
     res_dirs = set(res_index.get('dirs', {}).keys())
     if doc_dirs != res_dirs:
-        logger.error(f'directory structure mismatch: doc={len(doc_dirs)} res={len(res_dirs)}')
+        missing_in_res_dirs = sorted(doc_dirs - res_dirs)
+        missing_in_doc_dirs = sorted(res_dirs - doc_dirs)
+        for rel_path in missing_in_res_dirs:
+            logger.error(f'doc directory missing in res: {rel_path}')
+        for rel_path in missing_in_doc_dirs:
+            logger.error(f'res directory missing in doc: {rel_path}')
+        logger.info(
+            f'directory structure mismatch summary: doc={len(doc_dirs)} res={len(res_dirs)} '
+            f'missing_in_res={len(missing_in_res_dirs)} missing_in_doc={len(missing_in_doc_dirs)}'
+        )
 
 
 def compare_indexes(old_index: dict, new_index: dict, logger: Logger) -> None:
-    old_files = old_index.get('files', {})
-    new_files = new_index.get('files', {})
-
-    old_file_keys = set(old_files.keys())
-    new_file_keys = set(new_files.keys())
-
-    missing = old_file_keys - new_file_keys
-    extra = new_file_keys - old_file_keys
-    for rel_path in sorted(missing):
-        logger.error(f'compare: missing file in new: {rel_path}')
-    for rel_path in sorted(extra):
-        logger.error(f'compare: extra file in new: {rel_path}')
-
-    common = old_file_keys & new_file_keys
-    for rel_path in sorted(common):
-        old_entry = old_files[rel_path]
-        new_entry = new_files[rel_path]
-        if old_entry.get('size') != new_entry.get('size'):
-            logger.error(f'compare: size mismatch: {rel_path}')
-        if old_entry.get('hash') != new_entry.get('hash'):
-            logger.error(f'compare: hash mismatch: {rel_path}')
-        else:
-            if old_entry.get('mtime') != new_entry.get('mtime'):
-                logger.warning(f'compare: mtime differs but hash same: {rel_path}')
-
-    old_dirs = set(old_index.get('dirs', {}).keys())
-    new_dirs = set(new_index.get('dirs', {}).keys())
-    if old_dirs != new_dirs:
-        logger.error(f'compare: directory mismatch old={len(old_dirs)} new={len(new_dirs)}')
-
-    old_placeholders = set(old_index.get('placeholders', {}).keys())
-    new_placeholders = set(new_index.get('placeholders', {}).keys())
-    if old_placeholders != new_placeholders:
-        logger.error(f'compare: placeholder mismatch old={len(old_placeholders)} new={len(new_placeholders)}')
+    issues = collect_compare_issues(old_index, new_index)
+    emit_compare_issue_logs(issues, logger)
 
 
 def index_for_validation(root: Path, config: Config, logger: Logger) -> dict:

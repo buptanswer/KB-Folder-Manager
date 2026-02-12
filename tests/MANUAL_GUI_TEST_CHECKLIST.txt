@@ -13,8 +13,8 @@ Then follow this checklist:
 
 ## GUI Launch Test
 [ ] GUI window opens without errors
-[ ] Window title shows "KB Folder Manager v3.1.0"
-[ ] All 5 tabs are visible: Split, Merge, Validate, Index, Settings
+[ ] Window title shows "KB Folder Manager v3.2.0"
+[ ] All 6 tabs are visible: Split, Merge, Validate, Repair, Index, Settings
 
 ## Split Tab Test
 [ ] "Source (Complete Folder)" field and Browse button visible
@@ -23,6 +23,7 @@ Then follow this checklist:
 [ ] "Auto-confirm" checkbox works
 [ ] "Execute Split Operation" button is clickable
 [ ] Browse dialogs open correctly
+[ ] "Split Log (Current Tab)" output box is visible
 
 ## Merge Tab Test
 [ ] "Doc Folder" field and Browse button visible
@@ -32,6 +33,7 @@ Then follow this checklist:
 [ ] "Auto-confirm" checkbox works
 [ ] "Execute Merge Operation" button is clickable
 [ ] Browse dialogs open correctly
+[ ] "Merge Log (Current Tab)" output box is visible
 
 ## Validate Tab Test
 [ ] 4 radio buttons visible: Class1, Class2, Mutual, Compare
@@ -39,6 +41,18 @@ Then follow this checklist:
 [ ] "Log Directory" field and Browse button visible
 [ ] "Execute Validation" button is clickable
 [ ] Mode selection updates input fields dynamically
+[ ] "Validation Log (Current Tab)" output box is visible
+
+## Repair Tab Test
+[ ] Compare Context section shows Folder1/Folder2 paths after compare
+[ ] Issue Type dropdown has values when compare found issues
+[ ] Strategy dropdown updates when Issue Type changes
+[ ] Issue Comparison supports multi-select
+[ ] Columns readable without manual resizing (path/size/mtime/hash/hint)
+[ ] Detail panel shows full size/mtime/hash for selected row
+[ ] "Apply to Selected" requires confirmation
+[ ] Applied rows are removed immediately from current list (no forced re-compare)
+[ ] "Repair Log (Current Tab)" output box is visible
 
 ## Index Tab Test
 [ ] "Target Folder" field and Browse button visible
@@ -46,6 +60,7 @@ Then follow this checklist:
 [ ] "Log Directory" field and Browse button visible
 [ ] "Generate Index" button is clickable
 [ ] Browse dialogs work for files and folders
+[ ] "Index Log (Current Tab)" output box is visible
 
 ## Settings Tab Test
 [ ] Configuration information displayed
@@ -58,8 +73,13 @@ Then follow this checklist:
 ## Progress and Logging Test
 [ ] Progress bar visible at bottom
 [ ] Status label shows "Ready" initially
+[ ] Activity indicator shows "Idle" initially
 [ ] Log output area is scrollable
 [ ] Log output area has proper size
+[ ] During operation, status spinner is animated
+[ ] During operation, Activity indicator is animated
+[ ] Progress bar stays indeterminate before first real progress (>0)
+[ ] Compare mode prints start/progress lines (no long silent period)
 
 ## Functional Test (Optional - requires test data)
 ### Split Operation
@@ -79,10 +99,18 @@ Then follow this checklist:
 
 ### Validate Operation
 [ ] Select a folder to validate
-[ ] Choose Class1 mode
+[ ] Choose Compare mode
 [ ] Execute validation
-[ ] Log shows validation results
-[ ] No errors if folder is valid
+[ ] Shared log and Validate inline log both show output
+[ ] Activity text in tab log area is animated during operation
+[ ] If issues exist, GUI auto-switches to Repair tab
+
+### Repair Operation
+[ ] In Repair tab, pick one issue type and strategy
+[ ] Select only part of rows and apply
+[ ] Verify only selected rows are removed
+[ ] Re-run compare and confirm issue count decreases
+[ ] Complete remaining repairs and final compare passes
 
 ### Index Operation
 [ ] Select a folder to index
