@@ -4,6 +4,20 @@
 
 完整的发布说明请查看：[docs/release-notes/](./docs/release-notes/)
 
+## [3.2.1] - 2026-02-14
+
+### 修复
+- **Mutual Validation 树形视图显示问题** 🐛
+  - 修复了 Mutual (Doc/Res Consistency) 验证后树形视图完全空白的严重 bug
+  - 根本原因：Treeview 的 parent 设置顺序错误导致 tkinter 渲染失败
+  - 解决方案：修正控件创建顺序，确保容器先创建，子控件直接在容器中创建
+  - 影响：此 bug 导致 Mutual 验证的批量修复功能完全不可用
+  - 详细分析：[docs/MUTUAL_VALIDATION_TREEVIEW_FIX.md](./docs/MUTUAL_VALIDATION_TREEVIEW_FIX.md)
+
+### 改进
+- 清理了修复过程中产生的调试代码和临时测试文件
+- 代码质量提升：移除了不必要的 UI 更新调用
+
 ## [3.2.0] - 2026-02-12
 
 ### 新增

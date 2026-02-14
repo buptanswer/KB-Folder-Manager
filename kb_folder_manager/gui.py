@@ -29,6 +29,7 @@ from .operations import (
     DOCRES_ISSUE_RES_ORPHAN_PLACEHOLDER,
     DOCRES_ISSUE_RES_SPECIFIED,
     analyze_compare_operation,
+    analyze_doc_res_repair_operation,
     apply_complete_fixes,
     apply_compare_fixes,
     apply_doc_res_fixes,
@@ -961,8 +962,13 @@ class KBFolderManagerGUI:
             "folder2_hash",
             "hint",
         )
+        
+        # 先创建容器，再在容器中创建树
+        tree_container = ttk.Frame(list_frame)
+        tree_container.grid(row=0, column=0, sticky=NSEW)
+        
         self.repair_tree = ttk.Treeview(
-            list_frame,
+            tree_container,  # 直接在tree_container中创建
             columns=tree_columns,
             show="headings",
             selectmode="extended",
@@ -986,14 +992,16 @@ class KBFolderManagerGUI:
         self.repair_tree.column("folder2_hash", width=160, minwidth=140, anchor=W, stretch=False)
         self.repair_tree.column("hint", width=320, minwidth=240, anchor=W, stretch=True)
         self.repair_tree.bind("<<TreeviewSelect>>", lambda _e: self._on_repair_selection_changed())
+        
+        # 确保行高足够显示内容
+        style = ttk.Style()
+        style.configure('Treeview', rowheight=25)
 
-        tree_container = ttk.Frame(list_frame)
-        tree_container.grid(row=0, column=0, sticky=NSEW)
         scrollbar = ttk.Scrollbar(tree_container, orient=VERTICAL, command=self.repair_tree.yview)
         h_scrollbar = ttk.Scrollbar(tree_container, orient=HORIZONTAL, command=self.repair_tree.xview)
         scrollbar.pack(side=RIGHT, fill=Y)
         h_scrollbar.pack(side=BOTTOM, fill=X)
-        self.repair_tree.pack(in_=tree_container, side=LEFT, fill=BOTH, expand=YES)
+        self.repair_tree.pack(side=LEFT, fill=BOTH, expand=YES)  # 不需要in_参数
         self.repair_tree.configure(yscrollcommand=scrollbar.set, xscrollcommand=h_scrollbar.set)
         list_frame.columnconfigure(0, weight=1)
         list_frame.rowconfigure(0, weight=1)
@@ -1049,14 +1057,16 @@ class KBFolderManagerGUI:
         for item in self.repair_tree.get_children():
             self.repair_tree.delete(item)
 
-        issue_type = self._issue_type_from_display(self.repair_issue_type_var.get())
+        display_value = self.repair_issue_type_var.get()
+        issue_type = self._issue_type_from_display(display_value)
         items = self.repair_issue_groups.get(issue_type, []) if issue_type else []
         for idx, issue in enumerate(items):
             iid = f'{idx:08d}'
             row_values = self._build_repair_tree_row(issue)
             self.repair_tree.insert('', END, iid=iid, values=row_values)
             self.repair_issue_item_map[iid] = issue
-        self._on_repair_selection_changed()
+        
+        self._update_repair_selection_status()
 
     def _build_repair_tree_row(
         self,
@@ -1946,16 +1956,15 @@ class KBFolderManagerGUI:
                 self._set_progress_indeterminate(False)
                 self._stop_status_spinner()
                 return
+            # Use analyze_doc_res_repair_operation to get full issue details
             thread = OperationThread(
-                validate_mutual_operation,
+                analyze_doc_res_repair_operation,
                 self.result_queue,
                 log_capture,
                 Path(doc.get()),
                 Path(res.get()),
                 self.config,
                 log_dir_path,
-                True,
-                confirm_callback=self._confirm_from_worker,
             )
             self._pending_validate_context.update({
                 'doc': Path(doc.get()),
@@ -2398,16 +2407,16 @@ class KBFolderManagerGUI:
                 op_name = self._current_operation_name
 
                 if op_name == 'validate_compare' and isinstance(payload, CompareAnalysisResult):
-                    self.load_compare_result_for_repair(payload)
                     blockers = payload.has_blockers()
                     issue_total = len(payload.issues)
                     if blockers:
+                        self.notebook.select(self.repair_frame)
+                        self.load_compare_result_for_repair(payload)
                         self.set_status("Compare finished with issues.")
                         self.log_message(
                             f"\n[WARNING] Compare found {issue_total} issue(s). "
                             "Switched to Repair tab for batch fix."
                         )
-                        self.notebook.select(self.repair_frame)
                         messagebox.showwarning(
                             "Compare Completed",
                             f"Found {issue_total} issue(s).\n"
@@ -2417,6 +2426,26 @@ class KBFolderManagerGUI:
                         self.set_status("Compare passed with no blockers.")
                         self.log_message("\n[SUCCESS] Compare found no blocking issues.")
                         messagebox.showinfo("Success", "Compare completed with no blocking issues.")
+                elif op_name == 'validate_mutual' and isinstance(payload, CompareAnalysisResult):
+                    blockers = payload.has_blockers()
+                    issue_total = len(payload.issues)
+                    if blockers:
+                        self.notebook.select(self.repair_frame)
+                        self.load_compare_result_for_repair(payload, context_type='doc_res', summary_title='Mutual Validation')
+                        self.set_status("Mutual validation found issues.")
+                        self.log_message(
+                            f"\n[WARNING] Mutual validation found {issue_total} issue(s). "
+                            "Switched to Repair tab for batch fix."
+                        )
+                        messagebox.showwarning(
+                            "Mutual Validation Completed",
+                            f"Found {issue_total} issue(s).\n"
+                            "Switched to Repair tab. Select issue type and strategy to batch-fix.",
+                        )
+                    else:
+                        self.set_status("Mutual validation passed.")
+                        self.log_message("\n[SUCCESS] Mutual validation found no issues.")
+                        messagebox.showinfo("Success", "Doc/Res consistency check passed with no issues.")
                 elif op_name == 'repair' and isinstance(payload, CompareFixResult):
                     self._prune_repair_issues_after_apply(payload)
                     self.set_status("Repair completed.")
